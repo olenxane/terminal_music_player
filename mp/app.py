@@ -21,8 +21,36 @@ from .setup_wizard import ensure_music_dirs
 MODE_CYCLE = ["sequential", "shuffle", "repeat_one", "repeat_all"]
 
 
+def _enable_windows_vt() -> bool:
+    """在 Windows 控制台输出句柄上开启 VT 处理。
+
+    rich 检测不到 VT 时会回退到旧式 Win32 渲染：频谱每帧数百个颜色段
+    逐段调用 SetConsoleTextAttribute/WriteConsoleW，控制台逐段重绘导致闪烁。
+    开启 VT 后 rich 走 ANSI 路径，整帧一次写入。
+    """
+    if sys.platform != "win32":
+        return False
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = ctypes.windll.kernel32
+    kernel32.GetStdHandle.restype = wintypes.HANDLE
+    kernel32.GetStdHandle.argtypes = [wintypes.DWORD]
+    kernel32.GetConsoleMode.argtypes = [wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD)]
+    kernel32.GetConsoleMode.restype = wintypes.BOOL
+    kernel32.SetConsoleMode.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+    kernel32.SetConsoleMode.restype = wintypes.BOOL
+
+    handle = kernel32.GetStdHandle(-11)  # STD_OUTPUT_HANDLE
+    mode = wintypes.DWORD()
+    if not kernel32.GetConsoleMode(handle, ctypes.byref(mode)):
+        return False
+    return bool(kernel32.SetConsoleMode(handle, mode.value | 0x0004))
+
+
 class App:
     def __init__(self, cfg_path: str, music_path: str | None, force_setup: bool = False):
+        _enable_windows_vt()
         self.console = Console()
         try:
             self.cfg = load_config(cfg_path)
@@ -56,6 +84,7 @@ class App:
             spectrum=self.spectrum,
             volume=self.cfg.playback.default_volume,
             on_track_end=self._on_track_end,
+            dsp_config=self.cfg.dsp,
         )
 
         self.current_track = None
@@ -152,6 +181,12 @@ class App:
         self.spectrum.max_db = self.cfg.spectrum.max_db
         if self.player.equalizer:
             self.player.set_eq_bands(self.cfg.equalizer.bands_db)
+        # 同步 DSP 开关
+        self.player.loudness_enabled = self.cfg.dsp.loudness.enabled
+        self.player.vbe_enabled = self.cfg.dsp.vbe.enabled
+        self.player.limiter_enabled = self.cfg.dsp.limiter.enabled
+        self.player.loudness_target_lufs = self.cfg.dsp.loudness.target_lufs
+        self.player._init_dsp_modules()
 
     def rerun_dir_setup(self):
         self._pending_dir_setup = True

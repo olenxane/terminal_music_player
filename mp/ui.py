@@ -60,7 +60,9 @@ def _fit_text(text: str, target_width: int) -> str:
 def render_spectrum(levels: np.ndarray, theme, height: int = 4,
                     width: int = 50) -> Text:
     """把 0~1 的能量数组渲染成竖直条形频谱。
-    渐变方向为左右（按列位置取色），空格位用 dim 色的 ▁ 填充消除割裂感。"""
+    渐变方向为左右（按列位置取色），空格位用 dim 色的 ▁ 填充消除割裂感。
+    渐变色按宽度量化为相邻不可分辨的色级，同色同字符的相邻列合并为单个
+    样式段，减少每帧输出段数（旧式 Windows 控制台逐段重绘，段数越多越闪烁）。"""
     text = Text(no_wrap=True)
     rows = height
 
@@ -69,6 +71,15 @@ def render_spectrum(levels: np.ndarray, theme, height: int = 4,
         dst = np.linspace(0, 1, width)
         levels = np.interp(dst, src, levels)
     n = len(levels)
+
+    # 预计算每列颜色：量化级数按宽度缩放（约每 3 列一个色级），
+    # 色带宽度小于一个柱宽，肉眼不可见；相邻同色列仍可合并为长段
+    grad_steps = min(max(width // 3, 16), 48)
+    col_colors = []
+    for col_idx in range(n):
+        t = col_idx / n
+        qt = round(t * (grad_steps - 1)) / (grad_steps - 1)
+        col_colors.append(_gradient_color(qt, theme.spectrum_gradient))
 
     columns = []
     for lvl in levels:
@@ -86,13 +97,21 @@ def render_spectrum(levels: np.ndarray, theme, height: int = 4,
         columns.append(col_chars)
 
     for row in range(rows - 1, -1, -1):
+        run_ch = None
+        run_style = None
+        run_len = 0
         for col_idx, col in enumerate(columns):
             v = col[row]
-            if v == 0:
-                text.append("▁", style=theme.dim)
+            ch = "▁" if v == 0 else SPECTRUM_CHARS[v]
+            style = theme.dim if v == 0 else col_colors[col_idx]
+            if ch == run_ch and style == run_style:
+                run_len += 1
             else:
-                color = _gradient_color(col_idx / n, theme.spectrum_gradient)
-                text.append(SPECTRUM_CHARS[v], style=color)
+                if run_len:
+                    text.append(run_ch * run_len, style=run_style)
+                run_ch, run_style, run_len = ch, style, 1
+        if run_len:
+            text.append(run_ch * run_len, style=run_style)
         if row > 0:
             text.append("\n")
     return text

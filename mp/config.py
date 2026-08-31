@@ -98,12 +98,39 @@ class PlaybackConfig:
 
 
 @dataclass
+class LoudnessConfig:
+    enabled: bool = False
+    target_lufs: float = -16.0
+
+
+@dataclass
+class VbeConfig:
+    enabled: bool = False
+    gain_db: float = -3.0
+
+
+@dataclass
+class LimiterConfig:
+    enabled: bool = False
+    threshold_db: float = -1.0
+    release_ms: float = 50.0
+
+
+@dataclass
+class DspConfig:
+    loudness: LoudnessConfig = field(default_factory=LoudnessConfig)
+    vbe: VbeConfig = field(default_factory=VbeConfig)
+    limiter: LimiterConfig = field(default_factory=LimiterConfig)
+
+
+@dataclass
 class AppConfig:
     music_dirs: list
     equalizer: EqualizerConfig
     lyrics: LyricsConfig
     spectrum: SpectrumConfig
     playback: PlaybackConfig
+    dsp: DspConfig
     theme: ThemeColors
     all_themes: dict
     raw: dict
@@ -219,6 +246,26 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> AppConfig:
         ui_width=max(30, int(pb_raw.get("ui_width", 50))),
     )
 
+    dsp_raw = raw.get("dsp", {}) or {}
+    loud_raw = dsp_raw.get("loudness", {}) or {}
+    vbe_raw = dsp_raw.get("vbe", {}) or {}
+    lim_raw = dsp_raw.get("limiter", {}) or {}
+    dsp = DspConfig(
+        loudness=LoudnessConfig(
+            enabled=bool(loud_raw.get("enabled", False)),
+            target_lufs=float(loud_raw.get("target_lufs", -16.0)),
+        ),
+        vbe=VbeConfig(
+            enabled=bool(vbe_raw.get("enabled", False)),
+            gain_db=float(vbe_raw.get("gain_db", -3.0)),
+        ),
+        limiter=LimiterConfig(
+            enabled=bool(lim_raw.get("enabled", False)),
+            threshold_db=float(lim_raw.get("threshold_db", -1.0)),
+            release_ms=float(lim_raw.get("release_ms", 50.0)),
+        ),
+    )
+
     themes_raw = raw.get("themes", {}) or {}
     all_themes = {k: _build_theme(k, v) for k, v in themes_raw.items()}
     theme_key = raw.get("theme", "neon")
@@ -236,6 +283,7 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> AppConfig:
         lyrics=lyrics,
         spectrum=spectrum,
         playback=playback,
+        dsp=dsp,
         theme=all_themes[theme_key],
         all_themes=all_themes,
         raw=raw,

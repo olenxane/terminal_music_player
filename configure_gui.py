@@ -116,6 +116,7 @@ class ConfigGUI:
         self._collect_eq()
         self._collect_theme()
         self._collect_spectrum_lyrics()
+        self._collect_dsp()
         self._collect_dirs()
         with open(self.cfg_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(self.raw, f, allow_unicode=True,
@@ -130,6 +131,7 @@ class ConfigGUI:
         self._build_eq_tab(notebook)
         self._build_theme_tab(notebook)
         self._build_spectrum_tab(notebook)
+        self._build_dsp_tab(notebook)
         self._build_dirs_tab(notebook)
 
         btn_frame = ttk.Frame(self.root)
@@ -474,6 +476,66 @@ class ConfigGUI:
         pb["playlist_mode"] = self._pb_mode_var.get()
         pb["ui_fps"] = self._pb_fps_var.get()
         pb["ui_width"] = self._pb_width_var.get()
+
+    # --- 音质增强 DSP Tab ---
+    def _build_dsp_tab(self, notebook: ttk.Notebook):
+        frame = ttk.Frame(notebook)
+        notebook.add(frame, text="音质增强")
+        dsp = self.raw.get("dsp", {})
+
+        # ---- 响度均衡 ----
+        loud = ttk.LabelFrame(frame, text="响度均衡 (LUFS)")
+        loud.pack(fill="x", padx=8, pady=4)
+        self._dsp_loud_enabled = tk.BooleanVar(value=dsp.get("loudness", {}).get("enabled", False))
+        ttk.Checkbutton(loud, text="启用响度均衡", variable=self._dsp_loud_enabled).grid(
+            row=0, column=0, sticky="w", padx=4, pady=2)
+        ttk.Label(loud, text="目标响度 (LUFS):").grid(row=1, column=0, sticky="w", padx=4, pady=2)
+        self._dsp_loud_target = tk.DoubleVar(value=dsp.get("loudness", {}).get("target_lufs", -16.0))
+        ttk.Spinbox(loud, from_=-30, to=-8, increment=1,
+                    textvariable=self._dsp_loud_target, width=8).grid(
+            row=1, column=1, sticky="w")
+
+        # ---- 虚拟低音 ----
+        vbe = ttk.LabelFrame(frame, text="虚拟低音增强 (VBE)")
+        vbe.pack(fill="x", padx=8, pady=4)
+        self._dsp_vbe_enabled = tk.BooleanVar(value=dsp.get("vbe", {}).get("enabled", False))
+        ttk.Checkbutton(vbe, text="启用虚拟低音", variable=self._dsp_vbe_enabled).grid(
+            row=0, column=0, sticky="w", padx=4, pady=2)
+        ttk.Label(vbe, text="谐波混合增益 (dB):").grid(row=1, column=0, sticky="w", padx=4, pady=2)
+        self._dsp_vbe_gain = tk.DoubleVar(value=dsp.get("vbe", {}).get("gain_db", -3.0))
+        ttk.Spinbox(vbe, from_=-6, to=3, increment=0.5,
+                    textvariable=self._dsp_vbe_gain, width=8).grid(
+            row=1, column=1, sticky="w")
+
+        # ---- 软限幅器 ----
+        lim = ttk.LabelFrame(frame, text="软限幅器 (Soft Limiter)")
+        lim.pack(fill="x", padx=8, pady=4)
+        self._dsp_lim_enabled = tk.BooleanVar(value=dsp.get("limiter", {}).get("enabled", False))
+        ttk.Checkbutton(lim, text="启用软限幅器", variable=self._dsp_lim_enabled).grid(
+            row=0, column=0, sticky="w", padx=4, pady=2)
+        ttk.Label(lim, text="阈值 (dBFS):").grid(row=1, column=0, sticky="w", padx=4, pady=2)
+        self._dsp_lim_threshold = tk.DoubleVar(value=dsp.get("limiter", {}).get("threshold_db", -1.0))
+        ttk.Spinbox(lim, from_=-12, to=0, increment=0.5,
+                    textvariable=self._dsp_lim_threshold, width=8).grid(
+            row=1, column=1, sticky="w")
+        ttk.Label(lim, text="释放时间 (ms):").grid(row=2, column=0, sticky="w", padx=4, pady=2)
+        self._dsp_lim_release = tk.DoubleVar(value=dsp.get("limiter", {}).get("release_ms", 50.0))
+        ttk.Spinbox(lim, from_=5, to=500, increment=5,
+                    textvariable=self._dsp_lim_release, width=8).grid(
+            row=2, column=1, sticky="w")
+
+        ttk.Label(frame, text="提示: 各模块独立开关，全部关闭时不影响原有播放链路。",
+                  foreground="#888").pack(anchor="w", padx=8, pady=4)
+
+    def _collect_dsp(self):
+        dsp = self.raw.setdefault("dsp", {})
+        dsp.setdefault("loudness", {})["enabled"] = self._dsp_loud_enabled.get()
+        dsp["loudness"]["target_lufs"] = self._dsp_loud_target.get()
+        dsp.setdefault("vbe", {})["enabled"] = self._dsp_vbe_enabled.get()
+        dsp["vbe"]["gain_db"] = self._dsp_vbe_gain.get()
+        dsp.setdefault("limiter", {})["enabled"] = self._dsp_lim_enabled.get()
+        dsp["limiter"]["threshold_db"] = self._dsp_lim_threshold.get()
+        dsp["limiter"]["release_ms"] = self._dsp_lim_release.get()
 
     # --- 音频目录 Tab ---
     def _build_dirs_tab(self, notebook: ttk.Notebook):
