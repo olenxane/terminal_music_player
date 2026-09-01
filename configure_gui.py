@@ -1,28 +1,16 @@
 #!/usr/bin/env python3
-"""终端音乐播放器 — 独立 GUI 配置工具（tkinter）
-4 个标签页：均衡器 / 主题 / 频谱·歌词·播放 / 音频目录
-保存后写入 config.yaml，播放器中按 r 键即可热重载。
-"""
 from __future__ import annotations
 import os
 import re
 import sys
-
-try:
-    import tkinter as tk
-    from tkinter import ttk, filedialog, messagebox, colorchooser
-except ImportError:
-    print("当前 Python 环境未安装 tkinter，无法启动 GUI 配置工具。")
-    sys.exit(1)
-
-try:
-    import yaml
-except ImportError:
-    print("需要 PyYAML：pip install pyyaml")
-    sys.exit(1)
+import tkinter as tk
+from tkinter import ttk, filedialog, messagebox, colorchooser
+import yaml
 
 BAND_FREQS = ["31Hz", "62Hz", "125Hz", "250Hz", "500Hz",
               "1kHz", "2kHz", "4kHz", "8kHz", "16kHz"]
+
+DEFAULT_Q_VALUES = [1.0, 1.0, 1.0, 1.0, 2.5, 1.0, 1.0, 1.0, 4.0, 1.0]
 
 EQ_PRESETS = {
     "flat":       [0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
@@ -93,6 +81,7 @@ class ConfigGUI:
         self.root.resizable(True, True)
         self._sliders_eq: list[ttk.Scale] = []
         self._labels_eq: list[ttk.Label] = []
+        self._spins_q: list[ttk.Spinbox] = []
         self._theme_preview_canvas = None
         self._dirs_listbox = None
         self._theme_names = []
@@ -164,6 +153,8 @@ class ConfigGUI:
         eq_raw = self.raw.get("equalizer", {})
         bands_map = eq_raw.get("bands", {})
         current_vals = [float(bands_map.get(f, 0)) for f in BAND_FREQS]
+        q_map = eq_raw.get("q_values", {})
+        current_q = [float(q_map.get(f, dq)) for f, dq in zip(BAND_FREQS, DEFAULT_Q_VALUES)]
 
         for i, freq in enumerate(BAND_FREQS):
             col = ttk.Frame(bands_frame)
@@ -171,10 +162,16 @@ class ConfigGUI:
             ttk.Label(col, text=freq, font=("", 8)).pack()
             val_label = ttk.Label(col, text=f"{current_vals[i]:+.0f}", width=4)
             val_label.pack()
-            slider = ttk.Scale(col, from_=-12, to=12, orient="vertical")
+            slider = ttk.Scale(col, from_=12, to=-12, orient="vertical")
             slider.pack(fill="y", pady=4)
+            ttk.Label(col, text="Q", font=("", 7)).pack()
+            q_spin = ttk.Spinbox(col, from_=0.1, to=10.0, increment=0.1,
+                                 width=4, font=("", 7))
+            q_spin.set(current_q[i])
+            q_spin.pack()
             self._sliders_eq.append(slider)
             self._labels_eq.append(val_label)
+            self._spins_q.append(q_spin)
             slider.set(current_vals[i])
             slider.configure(command=lambda v, idx=i: self._on_eq_slider(v, idx))
 
@@ -196,9 +193,12 @@ class ConfigGUI:
         eq = self.raw.setdefault("equalizer", {})
         eq["enabled"] = self._eq_enabled_var.get()
         bands = {}
+        q_values = {}
         for i, freq in enumerate(BAND_FREQS):
             bands[freq] = round(float(self._sliders_eq[i].get()))
+            q_values[freq] = round(float(self._spins_q[i].get()), 2)
         eq["bands"] = bands
+        eq["q_values"] = q_values
 
     # --- 主题 Tab ---
     def _build_theme_tab(self, notebook: ttk.Notebook):
@@ -317,13 +317,13 @@ class ConfigGUI:
         w, h = 300, 80
         cvs.config(bg=bg)
         # 标题行
-        cvs.create_text(8, 8, anchor="nw", text="▶ 晴天 · 周杰伦  01:35/04:29",
+        cvs.create_text(8, 8, anchor="nw", text="▶ 谜底 · 花僮/洛天依  01:35/04:29",
                         fill=text_c, font=("", 9, "bold"))
         # 进度条
         cvs.create_rectangle(8, 28, 200, 30, fill=accent, outline="")
         cvs.create_rectangle(200, 28, 292, 30, fill=text_c, outline="", stipple="gray50")
         # 歌词行
-        cvs.create_text(8, 38, anchor="nw", text="♪ 故事的小黄花", fill=lyric_cur, font=("", 9))
+        cvs.create_text(8, 38, anchor="nw", text="♪ 我是真的真的很爱你 期待有天能和你相遇", fill=lyric_cur, font=("", 9))
         # 频谱预览（左右渐变，与终端一致）
         bar_x = 8
         bar_w = 5
@@ -385,6 +385,17 @@ class ConfigGUI:
         self._spec_height_var = tk.IntVar(value=spec.get("height", 4))
         ttk.Spinbox(grp, from_=1, to=5, textvariable=self._spec_height_var, width=6).grid(
             row=0, column=1, sticky="w")
+
+        ttk.Label(grp, text="高度缩放 (0.1~5.0):").grid(row=0, column=2, sticky="w", padx=(12, 4), pady=2)
+        self._spec_height_scale_var = tk.DoubleVar(value=spec.get("height_scale", 1.0))
+        ttk.Spinbox(grp, from_=0.1, to=5.0, increment=0.1,
+                    textvariable=self._spec_height_scale_var, width=6).grid(
+            row=0, column=3, sticky="w")
+
+        ttk.Label(grp, text="占位符:").grid(row=1, column=2, sticky="w", padx=(12, 4), pady=2)
+        self._zhanwei_char = tk.StringVar(value=spec.get("zhanwei_char", "▁"))
+        ttk.Entry(grp, textvariable=self._zhanwei_char, width=6).grid(
+            row=1, column=3, sticky="w")
 
         ttk.Label(grp, text="柱数:").grid(row=1, column=0, sticky="w", padx=4, pady=2)
         self._spec_bars_var = tk.IntVar(value=spec.get("bars", 48))
@@ -461,10 +472,12 @@ class ConfigGUI:
     def _collect_spectrum_lyrics(self):
         spec = self.raw.setdefault("spectrum", {})
         spec["height"] = max(1, min(5, self._spec_height_var.get()))
+        spec["height_scale"] = round(max(0.1, float(self._spec_height_scale_var.get())), 2)
         spec["bars"] = self._spec_bars_var.get()
         spec["fft_size"] = self._spec_fft_var.get()
         spec["smoothing"] = round(self._spec_smooth_var.get(), 2)
         spec["enabled"] = self._spec_enabled_var.get()
+        spec["zhanwei_char"] = self._zhanwei_char.get()
 
         lyr = self.raw.setdefault("lyrics", {})
         lyr["fuzzy_match"] = self._lyr_fuzzy_var.get()
@@ -490,7 +503,7 @@ class ConfigGUI:
         ttk.Checkbutton(loud, text="启用响度均衡", variable=self._dsp_loud_enabled).grid(
             row=0, column=0, sticky="w", padx=4, pady=2)
         ttk.Label(loud, text="目标响度 (LUFS):").grid(row=1, column=0, sticky="w", padx=4, pady=2)
-        self._dsp_loud_target = tk.DoubleVar(value=dsp.get("loudness", {}).get("target_lufs", -16.0))
+        self._dsp_loud_target = tk.DoubleVar(value=dsp.get("loudness", {}).get("t   arget_lufs", -16.0))
         ttk.Spinbox(loud, from_=-30, to=-8, increment=1,
                     textvariable=self._dsp_loud_target, width=8).grid(
             row=1, column=1, sticky="w")

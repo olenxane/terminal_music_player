@@ -35,7 +35,7 @@ def _first(tags, keys, default=""):
 def read_metadata(path: str) -> TrackInfo:
     filename = os.path.splitext(os.path.basename(path))[0]
     ext = os.path.splitext(path)[1].lower().lstrip(".")
-    title, artist, album, duration = filename, "未知艺人", "未知专辑", 0.0
+    title, artist, album, duration = filename, "神秘艺术家", "神秘专辑", 0.0
 
     if MutagenFile is not None:
         try:
@@ -43,8 +43,8 @@ def read_metadata(path: str) -> TrackInfo:
             if audio is not None:
                 tags = audio.tags
                 title = _first(tags, ["title"], filename) or filename
-                artist = _first(tags, ["artist"], "未知艺人") or "未知艺人"
-                album = _first(tags, ["album"], "未知专辑") or "未知专辑"
+                artist = _first(tags, ["artist"], "神秘艺术家") or "神秘艺术家"
+                album = _first(tags, ["album"], "神秘专辑") or "神秘专辑"
                 if audio.info is not None:
                     duration = float(getattr(audio.info, "length", 0.0) or 0.0)
         except Exception:

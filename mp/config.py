@@ -16,7 +16,7 @@ DEFAULT_CONFIG_PATH = os.path.join(os.path.dirname(os.path.dirname(__file__)), "
 BAND_FREQS = ["31Hz", "62Hz", "125Hz", "250Hz", "500Hz", "1kHz",
               "2kHz", "4kHz", "8kHz", "16kHz"]
 BAND_CENTER_HZ = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
-
+DEFAULT_Q_VALUES = [1.0, 1.0, 1.0, 1.0, 2.5, 1.0, 1.0, 1.0, 4.0, 1.0]
 
 class ConfigError(Exception):
     pass
@@ -24,7 +24,6 @@ class ConfigError(Exception):
 
 def _minimal_yaml_load(text: str) -> dict:
     """极简 YAML 兜底解析器（仅当 PyYAML 不可用时使用）。
-    仅支持本项目 config.yaml 用到的结构，不建议用于其他场景。
     """
     raise ConfigError(
         "未安装 PyYAML，无法解析配置文件。请先运行: pip install pyyaml"
@@ -64,6 +63,7 @@ class ThemeColors:
 class EqualizerConfig:
     enabled: bool
     bands_db: list  # 10 个 float, 单位 dB, 顺序与 BAND_FREQS 一致
+    q_values: list  # 10 个 float, 每个频段的 Q 值
     preset: str = "custom"
 
 
@@ -85,6 +85,8 @@ class SpectrumConfig:
     max_db: float = 0
     style: str = "blocks"
     height: int = 4  # 频谱行数，1~5
+    height_scale: float = 1.0  # 高度缩放因子，<1 变矮 >1 变高
+    zhanwei_char: str = "▁"  # 未填充格位的占位字符，默认 ▁
     enabled: bool = True  # 是否默认显示频谱
 
 
@@ -170,6 +172,12 @@ def _resolve_eq_bands(eq_raw: dict) -> list:
     return vals
 
 
+def _resolve_eq_q_values(eq_raw: dict) -> list:
+    q_map = eq_raw.get("q_values", {})
+    vals = [float(q_map.get(f, dq)) for f, dq in zip(BAND_FREQS, DEFAULT_Q_VALUES)]
+    return vals
+
+
 def _resolve_music_dirs(raw: dict) -> list:
     """兼容新旧两种写法：
     - 新版: music_dirs: [路径1, 路径2, ...]
@@ -213,6 +221,7 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> AppConfig:
     equalizer = EqualizerConfig(
         enabled=bool(eq_raw.get("enabled", True)),
         bands_db=_resolve_eq_bands(eq_raw),
+        q_values=_resolve_eq_q_values(eq_raw),
         preset=eq_raw.get("preset", "custom"),
     )
 
@@ -234,6 +243,8 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> AppConfig:
         max_db=float(spec_raw.get("max_db", 0)),
         style=spec_raw.get("style", "blocks"),
         height=max(1, min(5, int(spec_raw.get("height", 4)))),
+        height_scale=max(0.1, float(spec_raw.get("height_scale", 1.0))),
+        zhanwei_char=spec_raw.get("zhanwei_char", "▁") or "▁",
         enabled=bool(spec_raw.get("enabled", True)),
     )
 

@@ -107,7 +107,7 @@ class Player:
         return self._path
 
     # ---------- 加载/控制 ----------
-    def load(self, path: str, eq_bands=None):
+    def load(self, path: str, eq_bands=None, q_values=None):
         self.stop()
         self._file = FFmpegAudioFile(path)
         self._samplerate = self._file.samplerate
@@ -118,6 +118,7 @@ class Player:
         self._eof_notified = False
         self.equalizer = Equalizer(fs=self._samplerate,
                                     bands_db=eq_bands or [0.0] * 10,
+                                    q_values=q_values,
                                     channels=self._channels)
         self.spectrum.fs = self._samplerate
 
@@ -298,9 +299,9 @@ class Player:
         self.set_volume(self.volume + delta)
 
     # ---------- DSP 控制接口 ----------
-    def set_eq_bands(self, bands_db):
+    def set_eq_bands(self, bands_db, q_values=None):
         if self.equalizer:
-            self.equalizer.set_bands(bands_db)
+            self.equalizer.set_bands(bands_db, q_values=q_values)
 
     def toggle_eq(self):
         if self.equalizer:

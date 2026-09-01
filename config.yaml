@@ -14,13 +14,24 @@ equalizer:
     31Hz: 0
     62Hz: 0
     125Hz: 0
-    250Hz: 1
-    500Hz: 2
-    1kHz: 2
+    250Hz: -1
+    500Hz: -2
+    1kHz: 0
     2kHz: 1
     4kHz: 0
-    8kHz: 0
-    16kHz: 0
+    8kHz: -1
+    16kHz: -2
+  q_values:
+    31Hz: 1.0
+    62Hz: 1.0
+    125Hz: 1.0
+    250Hz: 1.0
+    500Hz: 2.5
+    1kHz: 1.0
+    2kHz: 1.0
+    4kHz: 1.0
+    8kHz: 4.0
+    16kHz: 1.0
   presets:
     flat:
     - 0
@@ -97,7 +108,9 @@ spectrum:
   style: blocks
   height: 4
   enabled: true
-theme: cyber_sakura
+  height_scale: 1.6
+  zhanwei_char: ' '
+theme: mint_soda
 themes:
   neon:
     name: 霓虹夜
@@ -214,7 +227,7 @@ themes:
   mint_soda:
     name: 薄荷汽水
     primary: '#35d0a5'
-    secondary: '#22f217'
+    secondary: '#1d7a5f'
     accent: '#4bdbfa'
     text: '#eafff7'
     dim: '#5f7d74'

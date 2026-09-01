@@ -40,14 +40,17 @@ class SpectrumAnalyzer:
         mag = np.abs(spec) / self.fft_size
         freqs = np.fft.rfftfreq(self.fft_size, d=1.0 / self.fs)
 
+        # 向量化分箱：将每个 FFT bin 分配到对应的对数频段
+        valid = (freqs >= self._edges[0]) & (freqs < self._edges[-1])
+        bar_idx = np.searchsorted(self._edges[1:-1], freqs[valid], side='right')
+        bar_idx = np.clip(bar_idx, 0, self.bars - 1)
         raw = np.zeros(self.bars, dtype=np.float32)
-        for i in range(self.bars):
-            lo, hi = self._edges[i], self._edges[i + 1]
-            mask = (freqs >= lo) & (freqs < hi)
-            if np.any(mask):
-                raw[i] = mag[mask].max()
-            else:
-                raw[i] = 0.0
+        np.maximum.at(raw, bar_idx, mag[valid])
+        # 低频频段窄于 FFT 分辨率时会有空 bar，从相邻非空 bar 线性插值避免结构性零值
+        empty = raw == 0
+        if np.any(empty) and np.any(~empty):
+            idx = np.arange(self.bars)
+            raw[empty] = np.interp(idx[empty], idx[~empty], raw[~empty])
 
         with np.errstate(divide="ignore"):
             db = 20 * np.log10(np.maximum(raw, 1e-9))

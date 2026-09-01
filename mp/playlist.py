@@ -41,6 +41,7 @@ class Playlist:
     index: int = 0
     mode: str = "sequential"  # sequential / shuffle / repeat_one / repeat_all
     _shuffle_order: list = field(default_factory=list)
+    _queue: list = field(default_factory=list)  # FIFO 播放队列（存储 track 索引）
 
     def load_dir(self, path: str):
         self.tracks = scan_music_dir(path)
@@ -98,3 +99,29 @@ class Playlist:
         if 0 <= i < len(self.tracks):
             self.index = i
         return self.current
+
+    # ---------------- 播放队列（FIFO） ----------------
+    def add_to_queue(self, i: int):
+        """添加歌曲索引到播放队列末尾"""
+        if 0 <= i < len(self.tracks):
+            self._queue.append(i)
+
+    def has_queue(self) -> bool:
+        return len(self._queue) > 0
+
+    def queue_len(self) -> int:
+        return len(self._queue)
+
+    def is_in_queue(self, i: int) -> bool:
+        return i in self._queue
+
+    def next_from_queue(self):
+        """弹出队列首项，跳转到该歌曲"""
+        if not self._queue:
+            return None
+        idx = self._queue.pop(0)
+        self.index = idx
+        return self.current
+
+    def clear_queue(self):
+        self._queue.clear()

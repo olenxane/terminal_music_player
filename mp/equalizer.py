@@ -30,9 +30,9 @@ def _peaking_eq_coeffs(freq, gain_db, q, fs):
 class Equalizer:
     """多段级联 EQ，支持逐块流式处理（保持滤波器状态）"""
 
-    def __init__(self, fs: int, bands_db=None, q: float = 1.0, channels: int = 2):
+    def __init__(self, fs: int, bands_db=None, q_values=None, channels: int = 2):
         self.fs = fs
-        self.q = q
+        self.q_values = list(q_values) if q_values else [1.0] * 10
         self.channels = channels
         self.enabled = True
         self.bands_db = list(bands_db) if bands_db else [0.0] * 10
@@ -42,7 +42,7 @@ class Equalizer:
 
     def _build_filters(self):
         self.filters = []
-        for freq, gain in zip(BAND_CENTER_HZ, self.bands_db):
+        for freq, gain, q in zip(BAND_CENTER_HZ, self.bands_db, self.q_values):
             if abs(gain) < 1e-9:
                 self.filters.append(None)  # 增益为0时跳过滤波，节省算力
                 continue
@@ -50,16 +50,20 @@ class Equalizer:
             if freq >= nyq:
                 self.filters.append(None)
                 continue
-            b, a = _peaking_eq_coeffs(freq, gain, self.q, self.fs)
+            b, a = _peaking_eq_coeffs(freq, gain, q, self.fs)
             self.filters.append((b, a))
 
-    def set_bands(self, bands_db):
+    def set_bands(self, bands_db, q_values=None):
         self.bands_db = list(bands_db)
+        if q_values is not None:
+            self.q_values = list(q_values)
         self._build_filters()
         self._zi = [[np.zeros(2) for _ in range(len(self.filters))] for _ in range(self.channels)]
 
-    def set_band(self, index: int, gain_db: float):
+    def set_band(self, index: int, gain_db: float, q: float | None = None):
         self.bands_db[index] = gain_db
+        if q is not None:
+            self.q_values[index] = q
         self._build_filters()
         self._zi = [[np.zeros(2) for _ in range(len(self.filters))] for _ in range(self.channels)]
 

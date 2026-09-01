@@ -17,6 +17,7 @@ from .metadata import read_metadata
 from . import ui
 from .keyinput import KeyReader
 from .setup_wizard import ensure_music_dirs
+from .stats import StatsTracker
 
 MODE_CYCLE = ["sequential", "shuffle", "repeat_one", "repeat_all"]
 
@@ -93,12 +94,22 @@ class App:
         self._running = True
         self._pending_dir_setup = False
         self._spectrum_on = self.cfg.spectrum.enabled
+        self._selector_active = False
+        self._search_str = ""
+        self._selector_index = 0
+        self._filtered_indices = list(range(len(self.playlist.tracks))) if self.playlist.tracks else []
+        stats_path = os.path.join(os.path.dirname(self.cfg.path), "stats.json")
+        self.stats = StatsTracker(stats_path)
+        self._stats_flush_timer = 0.0
 
         if self.playlist.tracks:
             self._load_current_track()
 
     # ---------------- 加载/切歌 ----------------
     def _load_current_track(self):
+        # 切歌前：上一首播放超过30秒才计入统计
+        if self.current_track is not None and self.player.position_sec >= 30:
+            self.stats.record_song(self.current_track.title)
         path = self.playlist.current
         if not path:
             return
@@ -109,9 +120,16 @@ class App:
             fuzzy_match=self.cfg.lyrics.fuzzy_match,
             fuzzy_threshold=self.cfg.lyrics.fuzzy_threshold,
         )
-        self.player.load(path, eq_bands=self.cfg.equalizer.bands_db)
+        self.player.load(path, eq_bands=self.cfg.equalizer.bands_db,
+                         q_values=self.cfg.equalizer.q_values)
 
     def _on_track_end(self):
+        # 播放队列优先：队列中有歌曲时按 FIFO 顺序播放
+        if self.playlist.has_queue():
+            self.playlist.next_from_queue()
+            self._load_current_track()
+            self.player.play()
+            return
         if self.playlist.mode == "repeat_one":
             self._load_current_track()
             self.player.play()
@@ -180,7 +198,8 @@ class App:
         self.spectrum.min_db = self.cfg.spectrum.min_db
         self.spectrum.max_db = self.cfg.spectrum.max_db
         if self.player.equalizer:
-            self.player.set_eq_bands(self.cfg.equalizer.bands_db)
+            self.player.set_eq_bands(self.cfg.equalizer.bands_db,
+                                     q_values=self.cfg.equalizer.q_values)
         # 同步 DSP 开关
         self.player.loudness_enabled = self.cfg.dsp.loudness.enabled
         self.player.vbe_enabled = self.cfg.dsp.vbe.enabled
@@ -196,6 +215,7 @@ class App:
         self.player.pause()
         dirs = ensure_music_dirs(self.console, self.cfg, force_setup=True)
         self.playlist.load_dirs(dirs)
+        self._filtered_indices = list(range(len(self.playlist.tracks)))
         if self.playlist.tracks:
             self._load_current_track()
             if was_playing:
@@ -205,12 +225,72 @@ class App:
             self.current_track = None
             self.lyrics_data = None
 
+    # ---------------- 歌曲选择器 ----------------
+    def _toggle_selector(self):
+        if not self.playlist.tracks:
+            return
+        self._selector_active = not self._selector_active
+        if self._selector_active:
+            self._search_str = ""
+            self._selector_index = 0
+            self._filtered_indices = list(range(len(self.playlist.tracks)))
+
+    def _update_filtered_indices(self):
+        """按搜索串过滤歌曲：关键词按空格拆分，每个需作为子串出现（顺序无关）"""
+        keywords = self._search_str.lower().split()
+        self._filtered_indices = [
+            i for i in range(len(self.playlist.tracks))
+            if all(kw in os.path.basename(self.playlist.tracks[i]).lower()
+                   for kw in keywords)
+        ]
+        if self._filtered_indices:
+            self._selector_index = min(self._selector_index,
+                                       len(self._filtered_indices) - 1)
+        else:
+            self._selector_index = 0
+
+    def _handle_selector_key(self, key: str):
+        if key == "\t" or key == "ESC":
+            self._selector_active = False
+        elif key == "UP":
+            if self._filtered_indices:
+                self._selector_index = max(0, self._selector_index - 1)
+        elif key == "DOWN":
+            if self._filtered_indices:
+                self._selector_index = min(len(self._filtered_indices) - 1,
+                                           self._selector_index + 1)
+        elif key == "RIGHT":
+            if self._filtered_indices and self._selector_index < len(self._filtered_indices):
+                orig_idx = self._filtered_indices[self._selector_index]
+                self.playlist.add_to_queue(orig_idx)
+                if self._selector_index < len(self._filtered_indices) - 1:
+                    self._selector_index += 1
+        elif key == "\r" or key == "\n":
+            if self._filtered_indices and self._selector_index < len(self._filtered_indices):
+                orig_idx = self._filtered_indices[self._selector_index]
+                self.playlist.jump_to(orig_idx)
+                self._load_current_track()
+                self.player.play()
+                self._selector_active = False
+        elif key == "\b" or key == "\x7f":
+            self._search_str = self._search_str[:-1]
+            self._update_filtered_indices()
+        elif key and len(key) == 1 and key.isprintable():
+            self._search_str += key
+            self._selector_index = 0
+            self._update_filtered_indices()
+
     # ---------------- 主循环 ----------------
     def handle_key(self, key: str):
         if key is None:
             return
+        if self._selector_active:
+            self._handle_selector_key(key)
+            return
         if key == "q":
             self._running = False
+        elif key == "\t":
+            self._toggle_selector()
         elif key == " ":
             self.play_pause()
         elif key == "n":
@@ -260,11 +340,18 @@ class App:
                     else:
                         levels = self.spectrum.silence_decay()
 
-                    renderable = ui.build_compact_ui(
-                        self.cfg, self.current_track, self.player, levels,
-                        self.lyrics_data, self.playlist, self._spectrum_on,
-                        width=self.cfg.playback.ui_width,
-                    )
+                    if self._selector_active:
+                        renderable = ui.build_song_selector_ui(
+                            self.cfg, self.playlist, self._search_str,
+                            self._filtered_indices, self._selector_index,
+                            width=self.cfg.playback.ui_width,
+                        )
+                    else:
+                        renderable = ui.build_compact_ui(
+                            self.cfg, self.current_track, self.player, levels,
+                            self.lyrics_data, self.playlist, self._spectrum_on,
+                            width=self.cfg.playback.ui_width,
+                        )
                     live.update(renderable, refresh=True)
 
                     elapsed = time.time() - t0
@@ -272,6 +359,15 @@ class App:
                     if sleep_left > 0:
                         time.sleep(sleep_left)
 
+                    frame_elapsed = time.time() - t0
+                    if self.player.state == PlayState.PLAYING:
+                        self.stats.add_seconds(frame_elapsed)
+                    self._stats_flush_timer += frame_elapsed
+                    if self._stats_flush_timer >= StatsTracker.FLUSH_INTERVAL:
+                        self.stats.flush()
+                        self._stats_flush_timer = 0.0
+
+        self.stats.flush()
         self.player.stop()
 
 
@@ -293,6 +389,9 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        if app.current_track is not None and app.player.position_sec >= 30:
+            app.stats.record_song(app.current_track.title)
+        app.stats.flush()
         app.player.stop()
 
 
