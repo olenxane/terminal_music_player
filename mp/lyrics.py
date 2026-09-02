@@ -143,6 +143,18 @@ def load_lyrics(song_path: str, lyrics_dir: str = "", fuzzy_match: bool = True,
     return LyricsData(lines=[], source_path=None, match_type="none")
 
 
+def lyrics_from_lines(lines: list) -> LyricsData:
+    """从 [(time_ms, text), ...] 或 [LyricLine, ...] 列表构建 LyricsData"""
+    parsed = []
+    for item in lines:
+        if isinstance(item, LyricLine):
+            parsed.append(item)
+        elif isinstance(item, (tuple, list)) and len(item) >= 2:
+            parsed.append(LyricLine(time_ms=int(item[0]), text=str(item[1])))
+    parsed.sort(key=lambda l: l.time_ms)
+    return LyricsData(lines=parsed, source_path=None, match_type="online")
+
+
 def _normalize_name(name: str) -> str:
     name = name.lower()
     name = re.sub(r"[\(\[（【][^)\]）】]*[\)\]）】]", "", name)

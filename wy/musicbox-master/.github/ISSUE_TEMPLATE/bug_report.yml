@@ -1,0 +1,124 @@
+name: Bug 报告
+description: 报告 MusicBox 的异常行为或崩溃
+title: "[Bug]: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        提交前请先阅读 [README 排错说明](https://github.com/darknessomi/musicbox#排错)，并确认已用最新版本复现。
+
+        **请勿**在 Issue 中粘贴 Cookie、扫码登录输出或完整日志中的敏感信息。
+
+  - type: textarea
+    id: description
+    attributes:
+      label: 问题描述
+      description: 简要说明发生了什么，以及对你造成了什么影响
+      placeholder: 例如：播放某首歌时终端报错并退出，无法继续操作
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: 复现步骤
+      description: 尽量给出可重复的操作步骤
+      placeholder: |
+        1. 运行 `musicbox`
+        2. 搜索并播放歌曲「……」
+        3. 按 `Space` 暂停
+        4. 出现报错
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_actual
+    attributes:
+      label: 期望与实际行为
+      description: 分别说明期望结果和实际结果；如有终端报错请一并贴上（可脱敏）
+      placeholder: |
+        期望：正常暂停，继续可操作
+        实际：终端输出 `Error: ...` 后退出
+    validations:
+      required: false
+
+  - type: input
+    id: version
+    attributes:
+      label: MusicBox 版本
+      description: 运行 `musicbox --version` 的输出
+      placeholder: "0.5.3"
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: 操作系统
+      placeholder: "macOS 15 / Ubuntu 24.04 / Raspberry Pi OS"
+    validations:
+      required: true
+
+  - type: input
+    id: python
+    attributes:
+      label: Python 版本
+      description: 运行 `python3 --version` 的输出
+      placeholder: "Python 3.12.x"
+    validations:
+      required: false
+
+  - type: dropdown
+    id: interface
+    attributes:
+      label: 问题界面
+      description: 问题出现在 TUI 还是 CLI / daemon
+      options:
+        - TUI（`musicbox` 交互界面）
+        - CLI 命令（如 `musicbox play`、`musicbox search`）
+        - Daemon（`musicboxd`）
+        - 不确定
+    validations:
+      required: false
+
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: 安装方式
+      options:
+        - PyPI / pipx / uv tool install
+        - 源码安装（uv sync / uv tool install .）
+        - 其他 / 不确定
+    validations:
+      required: false
+
+  - type: textarea
+    id: audio_check
+    attributes:
+      label: 音频依赖检查
+      description: 若与播放相关，请说明 `mpg123`、`mpv` 是否已安装及同一终端下能否正常播放
+      placeholder: |
+        - mpg123: 已安装，同一终端播放测试正常
+        - mpv: 已安装
+    validations:
+      required: false
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 相关日志
+      description: |
+        可从 `~/.local/share/netease-musicbox/musicbox.log` 提取相关片段（请脱敏）。
+        未设置 `XDG_DATA_HOME` 时路径为 `~/.netease-musicbox/musicbox.log`。
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: 补充信息
+      description: 截图、终端类型、代理设置、特定歌曲 ID 等
+    validations:
+      required: false

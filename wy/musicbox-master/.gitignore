@@ -1,0 +1,50 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+
+# Packaging
+.Python
+build/
+dist/
+*.egg-info/
+*.egg
+.eggs/
+*.manifest
+*.spec
+
+# Testing / lint
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.hypothesis/
+.ruff_cache/
+.mypy_cache/
+.ty_cache/
+
+# Environments
+.env
+.venv
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# HTTP session cache (runtime; canonical path is ~/.netease-musicbox/nemcache)
+http_cache.sqlite
+nemcache.sqlite
+
+# Local dev scratch
+test_login.py
+.poetry-cache/
+# Logs
+*.log
+
+docs/

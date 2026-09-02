@@ -7,6 +7,8 @@ import tkinter as tk
 from tkinter import ttk, filedialog, messagebox, colorchooser
 import yaml
 
+from mp.logging_utils import log_error
+
 BAND_FREQS = ["31Hz", "62Hz", "125Hz", "250Hz", "500Hz",
               "1kHz", "2kHz", "4kHz", "8kHz", "16kHz"]
 
@@ -92,12 +94,12 @@ class ConfigGUI:
     # ---------- 配置读写 ----------
     def _load_config(self) -> dict:
         if not os.path.exists(self.cfg_path):
-            print(f"配置文件不存在: {self.cfg_path}")
+            log_error(f"配置文件不存在: {self.cfg_path}")
             sys.exit(1)
         with open(self.cfg_path, "r", encoding="utf-8") as f:
             data = yaml.safe_load(f)
         if not isinstance(data, dict):
-            print("配置文件格式错误")
+            log_error("配置文件格式错误")
             sys.exit(1)
         return data
 
@@ -107,6 +109,7 @@ class ConfigGUI:
         self._collect_spectrum_lyrics()
         self._collect_dsp()
         self._collect_dirs()
+        self._collect_online()
         with open(self.cfg_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(self.raw, f, allow_unicode=True,
                            sort_keys=False, default_flow_style=False)
@@ -122,6 +125,7 @@ class ConfigGUI:
         self._build_spectrum_tab(notebook)
         self._build_dsp_tab(notebook)
         self._build_dirs_tab(notebook)
+        self._build_online_tab(notebook)
 
         btn_frame = ttk.Frame(self.root)
         btn_frame.pack(fill="x", padx=8, pady=(0, 8))
@@ -605,6 +609,36 @@ class ConfigGUI:
         self.raw["music_dirs"] = dirs
         self.raw.pop("music_dir", None)
         self.raw["lyrics_dir"] = self._lyrics_dir_var.get()
+
+    # --- 在线音乐 Tab ---
+    def _build_online_tab(self, notebook: ttk.Notebook):
+        frame = ttk.Frame(notebook)
+        notebook.add(frame, text="在线音乐")
+        om = self.raw.get("online_music", {})
+
+        grp = ttk.LabelFrame(frame, text="音质设置")
+        grp.pack(fill="x", padx=8, pady=8)
+
+        ttk.Label(grp, text="QQ音乐音质:").grid(row=0, column=0, sticky="w", padx=4, pady=2)
+        self._om_qq_quality = tk.IntVar(value=om.get("qq_quality", 320))
+        ttk.Combobox(grp, textvariable=self._om_qq_quality, state="readonly",
+                     width=8, values=[128, 320]).grid(row=0, column=1, sticky="w")
+
+        ttk.Label(grp, text="网易云音乐音质:").grid(row=1, column=0, sticky="w", padx=4, pady=2)
+        self._om_wy_quality = tk.StringVar(value=om.get("wy_quality", "exhigh"))
+        ttk.Combobox(grp, textvariable=self._om_wy_quality, state="readonly",
+                     width=10, values=["standard", "higher", "exhigh",
+                                        "lossless", "hires"]).grid(row=1, column=1, sticky="w")
+
+        ttk.Label(frame, text="提示: QQ音乐默认320k，失败自动回退128k。网易云默认exhigh(320k)。",
+                  foreground="#888").pack(anchor="w", padx=8, pady=4)
+        ttk.Label(frame, text="登录请在播放器中按 o 进入在线模式，选择平台后扫码登录。",
+                  foreground="#888").pack(anchor="w", padx=8, pady=2)
+
+    def _collect_online(self):
+        om = self.raw.setdefault("online_music", {})
+        om["qq_quality"] = int(self._om_qq_quality.get())
+        om["wy_quality"] = self._om_wy_quality.get()
 
     # ---------- 关闭 ----------
     def _on_close(self):

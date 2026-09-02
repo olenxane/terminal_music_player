@@ -126,6 +126,12 @@ class DspConfig:
 
 
 @dataclass
+class OnlineMusicConfig:
+    qq_quality: int = 320          # 128 或 320
+    wy_quality: str = "exhigh"     # standard/higher/exhigh/lossless/hires
+
+
+@dataclass
 class AppConfig:
     music_dirs: list
     equalizer: EqualizerConfig
@@ -137,6 +143,7 @@ class AppConfig:
     all_themes: dict
     raw: dict
     path: str
+    online_music: OnlineMusicConfig = field(default_factory=OnlineMusicConfig)
 
     def theme_names(self):
         return list(self.all_themes.keys())
@@ -288,6 +295,12 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> AppConfig:
 
     music_dirs = _resolve_music_dirs(raw)
 
+    om_raw = raw.get("online_music", {}) or {}
+    online_music = OnlineMusicConfig(
+        qq_quality=int(om_raw.get("qq_quality", 320)),
+        wy_quality=om_raw.get("wy_quality", "exhigh"),
+    )
+
     return AppConfig(
         music_dirs=music_dirs,
         equalizer=equalizer,
@@ -299,6 +312,7 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> AppConfig:
         all_themes=all_themes,
         raw=raw,
         path=path,
+        online_music=online_music,
     )
 
 

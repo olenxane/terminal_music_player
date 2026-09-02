@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "qqmusicbox-api"
+dynamic = ["version"]
+description = "QQ音乐终端版播放器 - 仅 API 库集成版（不含 TUI/播放器）"
+readme = {file = "README.md", content-type = "text/markdown"}
+license = {text = "MIT"}
+requires-python = ">=3.10"
+authors = [
+    {name = "QQMusicBox"}
+]
+keywords = ["qqmusic", "music", "api", "library"]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Operating System :: OS Independent",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Multimedia :: Sound/Audio",
+]
+
+dependencies = [
+    "qqmusic-api-python>=0.5.1,<1.0.0",
+    "httpx>=0.24.0,<1.0.0",
+    "Pillow>=10.0.0,<12.0.0",
+    "qrcode>=7.0.0,<9.0.0",
+    "pyzbar>=0.1.9,<1.0.0",
+    "cryptography>=41.0.0",
+    "python-socks>=2.0.0",
+    "platformdirs>=4.0.0",
+]
+
+[tool.setuptools.dynamic]
+version = {attr = "qqmusicbox.__version__"}
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["qqmusicbox*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

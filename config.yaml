@@ -339,3 +339,6 @@ dsp:
     enabled: true
     threshold_db: -1.0
     release_ms: 50.0
+online_music:
+  qq_quality: 320
+  wy_quality: exhigh

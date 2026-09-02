@@ -41,7 +41,9 @@ class Playlist:
     index: int = 0
     mode: str = "sequential"  # sequential / shuffle / repeat_one / repeat_all
     _shuffle_order: list = field(default_factory=list)
-    _queue: list = field(default_factory=list)  # FIFO 播放队列（存储 track 索引）
+    _queue: list = field(default_factory=list)  # FIFO 播放队列（存储 track 索引或 OnlineTrack）
+    _buffer_stack: list = field(default_factory=list)  # LIFO 播放历史缓冲栈
+    _from_queue: bool = False  # 当前是否处于队列/缓冲栈模式
 
     def load_dir(self, path: str):
         self.tracks = scan_music_dir(path)
@@ -115,13 +117,57 @@ class Playlist:
     def is_in_queue(self, i: int) -> bool:
         return i in self._queue
 
+    def is_online_in_queue(self, track) -> bool:
+        """检查在线歌曲是否已在队列中（按 platform + song_id 比对）"""
+        for item in self._queue:
+            if hasattr(item, "platform") and hasattr(item, "song_id"):
+                if item.platform == track.platform and item.song_id == track.song_id:
+                    return True
+        return False
+
+    def add_online_to_queue(self, track):
+        """添加在线歌曲到播放队列末尾"""
+        self._queue.append(track)
+
     def next_from_queue(self):
-        """弹出队列首项，跳转到该歌曲"""
+        """弹出队列首项，推入缓冲栈，返回 int（本地索引）或 OnlineTrack（在线歌曲）"""
         if not self._queue:
             return None
-        idx = self._queue.pop(0)
-        self.index = idx
-        return self.current
+        item = self._queue.pop(0)
+        self._buffer_stack.append(item)
+        self._from_queue = True
+        if isinstance(item, int):
+            self.index = item
+            return self.current
+        return item
+
+    def pop_queue_skip(self):
+        """弹出队列首项但不推入缓冲栈（用于跳过不可用歌曲）"""
+        if not self._queue:
+            return None
+        item = self._queue.pop(0)
+        return item
+
+    def prev_from_buffer(self):
+        """从缓冲栈弹出末项（上一首），返回 int 或 OnlineTrack"""
+        if not self._buffer_stack:
+            return None
+        item = self._buffer_stack.pop()
+        if isinstance(item, int):
+            self.index = item
+            return self.current
+        return item
+
+    def has_buffer(self) -> bool:
+        return len(self._buffer_stack) > 0
+
+    def buffer_len(self) -> int:
+        return len(self._buffer_stack)
+
+    def clear_buffer(self):
+        """清空缓冲栈并退出队列模式"""
+        self._buffer_stack.clear()
+        self._from_queue = False
 
     def clear_queue(self):
         self._queue.clear()

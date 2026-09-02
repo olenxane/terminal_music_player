@@ -92,8 +92,30 @@ class KeyReader:
         if code == 3:
             return "q"
 
+        # 多字节字符（中文等）：首字节 >= 0x80
+        if code >= 0x80:
+            return self._read_mb_char_windows(code)
+
         # 常规 ASCII 字符
         try:
             return bytes([code]).decode("utf-8", errors="replace")
+        except Exception:
+            return None
+
+    @staticmethod
+    def _read_mb_char_windows(first_code: int) -> str | None:
+        """读取多字节字符（GBK/GB2312 等中文编码）"""
+        if not msvcrt.kbhit():
+            # 只有一个高位字节，可能是误触发；等待极短时间
+            import time as _t
+            _t.sleep(0.005)
+            if not msvcrt.kbhit():
+                return None
+        ch2 = msvcrt.getch()
+        code2 = ch2[0] if isinstance(ch2, bytes) else ord(ch2)
+        import locale
+        enc = locale.getpreferredencoding(False) or "gbk"
+        try:
+            return bytes([first_code, code2]).decode(enc, errors="replace")
         except Exception:
             return None

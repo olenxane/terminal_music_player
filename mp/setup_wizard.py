@@ -9,6 +9,7 @@ from rich.prompt import Prompt, Confirm
 
 from .config import save_music_dirs
 from .playlist import scan_music_dir
+from .logging_utils import log_error
 
 
 def _validate_dir(raw_path: str) -> tuple:
@@ -85,6 +86,6 @@ def ensure_music_dirs(console: Console, cfg, force_setup: bool = False) -> list:
     try:
         save_music_dirs(cfg.path, dirs)
     except Exception as e:
-        console.print(f"[bold red]警告: 保存配置文件失败 ({e})，本次仍会使用刚才输入的目录运行。[/bold red]")
+        log_error(f"保存配置文件失败: {e}，本次仍会使用刚才输入的目录运行。")
     cfg.music_dirs = dirs
     return dirs

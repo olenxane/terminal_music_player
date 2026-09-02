@@ -63,7 +63,7 @@ class StatsTracker:
         if seconds <= 0:
             return
         today = self._get_today()
-        today["seconds"] += int(seconds)
+        today["seconds"] += seconds
         self._dirty = True
 
     def flush(self):
