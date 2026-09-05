@@ -4,7 +4,7 @@ import os
 import re
 import sys
 import tkinter as tk
-from tkinter import ttk, filedialog, messagebox, colorchooser
+from tkinter import ttk, filedialog, messagebox, colorchooser, simpledialog
 import yaml
 
 from mp.logging_utils import log_error
@@ -142,10 +142,15 @@ class ConfigGUI:
         ttk.Label(top, text="预设:").pack(side="left")
         preset_var = tk.StringVar(value=self.raw.get("equalizer", {}).get("preset", "custom"))
         preset_cb = ttk.Combobox(top, textvariable=preset_var,
-                                 values=["custom"] + list(EQ_PRESETS.keys()),
+                                 values=self._eq_preset_names(),
                                  state="readonly", width=14)
         preset_cb.pack(side="left", padx=4)
         preset_cb.bind("<<ComboboxSelected>>", lambda e: self._apply_preset(preset_var.get()))
+        self._preset_var = preset_var
+        self._preset_cb = preset_cb
+
+        ttk.Button(top, text="保存配置", command=self._save_eq_preset).pack(side="left", padx=4)
+        ttk.Button(top, text="删除配置", command=self._delete_eq_preset).pack(side="left", padx=4)
 
         eq_enabled = tk.BooleanVar(value=self.raw.get("equalizer", {}).get("enabled", True))
         ttk.Checkbutton(top, text="启用均衡器", variable=eq_enabled).pack(side="left", padx=12)
@@ -155,8 +160,13 @@ class ConfigGUI:
         bands_frame.pack(fill="both", expand=True, padx=8, pady=8)
 
         eq_raw = self.raw.get("equalizer", {})
-        bands_map = eq_raw.get("bands", {})
-        current_vals = [float(bands_map.get(f, 0)) for f in BAND_FREQS]
+        preset_name = eq_raw.get("preset", "custom")
+        config_presets = eq_raw.get("presets", {})
+        if preset_name != "custom" and preset_name in config_presets:
+            current_vals = [float(v) for v in config_presets[preset_name]]
+        else:
+            bands_map = eq_raw.get("bands", {})
+            current_vals = [float(bands_map.get(f, 0)) for f in BAND_FREQS]
         q_map = eq_raw.get("q_values", {})
         current_q = [float(q_map.get(f, dq)) for f, dq in zip(BAND_FREQS, DEFAULT_Q_VALUES)]
 
@@ -182,20 +192,73 @@ class ConfigGUI:
     def _on_eq_slider(self, value: str, idx: int):
         val = round(float(value))
         self._labels_eq[idx].config(text=f"{val:+d}")
+        # 手动调整滑块后不再属于任何预设，切回自定义
+        if self._preset_var.get() != "custom":
+            self._preset_var.set("custom")
 
     def _apply_preset(self, name: str):
         if name == "custom":
             return
         vals = EQ_PRESETS.get(name)
+        if vals is None:
+            vals = self.raw.get("equalizer", {}).get("presets", {}).get(name)
         if not vals:
             return
         for i, v in enumerate(vals):
             self._sliders_eq[i].set(v)
             self._labels_eq[i].config(text=f"{v:+d}")
 
+    def _eq_preset_names(self) -> list:
+        """下拉框可用预设：内置 + 配置文件中已有的自定义预设（去重）"""
+        names = ["custom"] + list(EQ_PRESETS.keys())
+        config_presets = self.raw.get("equalizer", {}).get("presets", {})
+        for key in config_presets:
+            if key not in names:
+                names.append(key)
+        return names
+
+    def _refresh_preset_values(self):
+        self._preset_cb["values"] = self._eq_preset_names()
+
+    def _save_eq_preset(self):
+        name = simpledialog.askstring("保存均衡器配置", "请输入配置名称：", parent=self.root)
+        if not name:
+            return
+        name = name.strip()
+        if not name:
+            return
+        if name in EQ_PRESETS:
+            messagebox.showwarning("无法保存", f"“{name}”是内置预设名称，请换一个名称。")
+            return
+        eq = self.raw.setdefault("equalizer", {})
+        presets = eq.setdefault("presets", {})
+        vals = [round(float(self._sliders_eq[i].get())) for i in range(len(BAND_FREQS))]
+        presets[name] = vals
+        self._refresh_preset_values()
+        self._preset_var.set(name)
+        messagebox.showinfo("已保存", f"均衡器配置“{name}”已保存。\n点击底部“保存配置”写入 config.yaml 生效。")
+
+    def _delete_eq_preset(self):
+        name = self._preset_var.get()
+        if name == "custom":
+            messagebox.showinfo("提示", "当前没有选中可删除的自定义配置。")
+            return
+        if name in EQ_PRESETS:
+            messagebox.showwarning("无法删除", "内置预设不能删除。")
+            return
+        eq = self.raw.get("equalizer", {})
+        presets = eq.get("presets", {})
+        if name not in presets:
+            return
+        if messagebox.askyesno("确认删除", f"确定删除自定义配置“{name}”吗？"):
+            del presets[name]
+            self._preset_var.set("custom")
+            self._refresh_preset_values()
+
     def _collect_eq(self):
         eq = self.raw.setdefault("equalizer", {})
         eq["enabled"] = self._eq_enabled_var.get()
+        eq["preset"] = self._preset_var.get()
         bands = {}
         q_values = {}
         for i, freq in enumerate(BAND_FREQS):
@@ -473,6 +536,42 @@ class ConfigGUI:
         ttk.Spinbox(grp, from_=30, to=200, textvariable=self._pb_width_var, width=6).grid(
             row=3, column=1, sticky="w")
 
+        self._build_marquee_section(parent)
+
+    def _build_marquee_section(self, parent):
+        grp = ttk.LabelFrame(parent, text="标题滚动（超长歌名跑马灯）")
+        grp.pack(fill="x", padx=8, pady=4)
+
+        mq = self.raw.get("playback", {}).get("marquee", {})
+
+        self._mq_enabled_var = tk.BooleanVar(value=mq.get("enabled", True))
+        ttk.Checkbutton(grp, text="开启截断滚动", variable=self._mq_enabled_var).grid(
+            row=0, column=0, columnspan=2, sticky="w", padx=4, pady=2)
+
+        ttk.Label(grp, text="停留秒数:").grid(row=1, column=0, sticky="w", padx=4, pady=2)
+        self._mq_hold_var = tk.DoubleVar(value=mq.get("hold_secs", 5.0))
+        ttk.Spinbox(grp, from_=0, to=30, increment=0.5,
+                    textvariable=self._mq_hold_var, width=6).grid(
+            row=1, column=1, sticky="w")
+
+        ttk.Label(grp, text="滚动速度 (秒/列):").grid(row=1, column=2, sticky="w",
+                                                     padx=(12, 4), pady=2)
+        self._mq_step_var = tk.DoubleVar(value=mq.get("step_interval", 0.3))
+        ttk.Spinbox(grp, from_=0.05, to=2.0, increment=0.05,
+                    textvariable=self._mq_step_var, width=6).grid(
+            row=1, column=3, sticky="w")
+
+        ttk.Label(grp, text="循环间隙 (列):").grid(row=2, column=2, sticky="w",
+                                                     padx=(12, 4), pady=2)
+        self._mq_gap_var = tk.IntVar(value=mq.get("gap_cols", 4))
+        ttk.Spinbox(grp, from_=0, to=20, increment=1,
+                    textvariable=self._mq_gap_var, width=6).grid(
+            row=2, column=3, sticky="w")
+
+        ttk.Label(grp, text="关闭后超长歌名恢复为静态截断加 …；改完保存后按 r 热重载生效。",
+                  foreground="#888").grid(row=2, column=0, columnspan=2,
+                                          sticky="w", padx=4, pady=2)
+
     def _collect_spectrum_lyrics(self):
         spec = self.raw.setdefault("spectrum", {})
         spec["height"] = max(1, min(5, self._spec_height_var.get()))
@@ -493,6 +592,11 @@ class ConfigGUI:
         pb["playlist_mode"] = self._pb_mode_var.get()
         pb["ui_fps"] = self._pb_fps_var.get()
         pb["ui_width"] = self._pb_width_var.get()
+        mq = pb.setdefault("marquee", {})
+        mq["enabled"] = self._mq_enabled_var.get()
+        mq["hold_secs"] = round(max(0.0, float(self._mq_hold_var.get())), 2)
+        mq["step_interval"] = round(max(0.05, float(self._mq_step_var.get())), 2)
+        mq["gap_cols"] = max(0, int(self._mq_gap_var.get()))
 
     # --- 音质增强 DSP Tab ---
     def _build_dsp_tab(self, notebook: ttk.Notebook):
@@ -507,7 +611,7 @@ class ConfigGUI:
         ttk.Checkbutton(loud, text="启用响度均衡", variable=self._dsp_loud_enabled).grid(
             row=0, column=0, sticky="w", padx=4, pady=2)
         ttk.Label(loud, text="目标响度 (LUFS):").grid(row=1, column=0, sticky="w", padx=4, pady=2)
-        self._dsp_loud_target = tk.DoubleVar(value=dsp.get("loudness", {}).get("t   arget_lufs", -16.0))
+        self._dsp_loud_target = tk.DoubleVar(value=dsp.get("loudness", {}).get("target_lufs", -16.0))
         ttk.Spinbox(loud, from_=-30, to=-8, increment=1,
                     textvariable=self._dsp_loud_target, width=8).grid(
             row=1, column=1, sticky="w")

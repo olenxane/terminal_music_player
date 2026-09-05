@@ -50,6 +50,21 @@ def log_exception(message: str) -> None:
     log_error(f"{message}\n{tb}")
 
 
+def attach_external_logger(name: str) -> None:
+    """把第三方库的 logger 挂到同一个日志文件，防止其警告输出到终端
+
+    第三方库（如 qqmusicbox）未配置 handler 时，WARNING 及以上级别
+    会经 logging.lastResort 机制直接打到 stderr，污染终端界面。
+    """
+    file_logger = _get_logger()
+    target = logging.getLogger(name)
+    for handler in file_logger.handlers:
+        if handler not in target.handlers:
+            target.addHandler(handler)
+    target.setLevel(logging.WARNING)
+    target.propagate = False
+
+
 def get_log_path() -> str:
     """返回当前错误日志文件路径"""
     return _LOG_FILE

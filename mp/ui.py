@@ -1,10 +1,13 @@
 """基于 rich 的紧凑终端界面渲染（≤7行）"""
 from __future__ import annotations
 import os
+import time
 import numpy as np
 from rich.console import Group
 from rich.text import Text
 from rich.cells import cell_len
+
+from .config import MarqueeConfig
 
 SPECTRUM_CHARS = " ▁▂▃▄▅▆▇█"
 
@@ -56,6 +59,74 @@ def _fit_text(text: str, target_width: int) -> str:
             break
         result += ch
     return result + "…"
+
+
+class _TitleScroller:
+    """超长标题的跑马灯：截断态停留 → 滚动一轮 → 如此循环。
+
+    每轮先显示截断后的标题（前缀 + …，停留 mq.hold_secs 秒），
+    再从标题开头无缝滚动一轮，然后回到截断态。
+    相位是时间戳的纯函数（构造记录 t0，渲染按 now - t0 推导），
+    与刷新帧率无关（帧率只影响平滑度）。参数来自 playback.marquee 配置。"""
+
+    def __init__(self, text: str, mq: MarqueeConfig):
+        self._text = text
+        self._chars = text + " " * mq.gap_cols
+        self._starts = []  # 每个字符在一个周期内的起始列
+        self._widths = []
+        acc = 0
+        for ch in self._chars:
+            w = cell_len(ch)
+            self._starts.append(acc)
+            self._widths.append(w)
+            acc += w
+        self._total = acc
+        self._hold = mq.hold_secs
+        self._step = mq.step_interval
+        self._cycle = self._hold + self._total * self._step
+        self._t0 = time.monotonic()
+
+    def render(self, available: int) -> str:
+        phase = (time.monotonic() - self._t0) % self._cycle
+        if phase < self._hold:
+            # 截断态：与未滚动时的静态外观一致。
+            # _fit_text 截断分支可能比目标宽度短 1 列（断点落在宽字符前），
+            # 此处统一补齐，避免行宽在停留/滚动切换时抖动
+            text = _fit_text(self._text, available)
+        else:
+            offset = int((phase - self._hold) / self._step) % self._total
+            # 取完整落在 [offset, offset+available) 内的字符，跨边缘的宽字符跳过
+            # （中文不会显示半截）；窗口最多跨一个周期边界，重复扫两遍即可
+            out = []
+            col_end = offset + available
+            for rep in range(2):
+                base = rep * self._total
+                for i, ch in enumerate(self._chars):
+                    start = base + self._starts[i]
+                    if start >= col_end:
+                        break
+                    if start >= offset and start + self._widths[i] <= col_end:
+                        out.append(ch)
+            text = "".join(out)
+        pad = available - cell_len(text)
+        return text + " " * pad if pad > 0 else text
+
+
+_SCROLLERS: dict[tuple, _TitleScroller] = {}
+
+
+def _get_title_scroller(text: str, available: int,
+                        mq: MarqueeConfig | None = None) -> _TitleScroller:
+    """按 (标题, 宽度, 参数) 复用跑马灯实例：参数不变时保持相位，
+    切歌/改标题/改配置自然换新实例，从截断态停留重新开始。"""
+    mq = mq or MarqueeConfig()
+    key = (text, available, mq.hold_secs, mq.step_interval, mq.gap_cols)
+    sc = _SCROLLERS.get(key)
+    if sc is None:
+        if len(_SCROLLERS) >= 8:
+            _SCROLLERS.clear()
+        sc = _SCROLLERS[key] = _TitleScroller(text, mq)
+    return sc
 
 
 def render_spectrum(levels: np.ndarray, theme, height: int = 4,
@@ -122,7 +193,8 @@ def render_spectrum(levels: np.ndarray, theme, height: int = 4,
     return text
 
 
-def _render_title_line(track, player, playlist, theme, width: int) -> Text:
+def _render_title_line(track, player, playlist, theme, width: int,
+                       marquee: MarqueeConfig | None = None) -> Text:
     """行1: 状态图标 标题 · 艺人 时间 [模式] 音量
     所有部分拼接后显示宽度恰好等于 width。"""
     mode_label = MODE_LABEL_ZH.get(playlist.mode, playlist.mode)
@@ -149,7 +221,12 @@ def _render_title_line(track, player, playlist, theme, width: int) -> Text:
     else:
         title_str = "无曲目"
 
-    fitted = _fit_text(title_str, available)
+    if ((marquee is None or marquee.enabled)
+            and cell_len(title_str) > available):
+        # 超宽标题：截断态停留后跑马灯滚动，循环往复（marquee.enabled=false 时静态截断）
+        fitted = _get_title_scroller(title_str, available, marquee).render(available)
+    else:
+        fitted = _fit_text(title_str, available)
 
     line = Text(no_wrap=True)
     line.append(icon_part, style=theme.accent)
@@ -190,7 +267,8 @@ def build_compact_ui(cfg, track, player, spectrum_levels, lyrics_data,
     """构建紧凑界面（开频谱 ≤7行，关频谱 ≤3行）"""
     theme = cfg.theme
     pos_ms = int(player.position_sec * 1000) + cfg.lyrics.offset_ms
-    title = _render_title_line(track, player, playlist, theme, width)
+    title = _render_title_line(track, player, playlist, theme, width,
+                               marquee=getattr(cfg.playback, "marquee", None))
     progress = _render_progress_bar(track, player, theme, width)
     lyrics = _render_lyrics_line(lyrics_data, pos_ms, theme, width)
 
@@ -239,11 +317,18 @@ def build_song_selector_ui(cfg, playlist, search_str: str,
             name = os.path.splitext(filename)[0]
             name = _fit_text(name, width - 10)
 
+            # 上下渐变：每行一个颜色，按可见窗口内的行位置取色
+            # （单行仍是一个样式段，不会增加每帧 SGR 段数）
+            visible = max(end - start - 1, 1)
+            row_color = _gradient_color((i - start) / visible,
+                                        theme.spectrum_gradient)
+
             line = Text(no_wrap=True)
             if i == selector_index:
-                line.append(f"  ▶ {name}", style=f"bold {theme.accent}")
+                line.append(f"  ▶ ", style=f"bold {theme.accent}")
+                line.append(name, style=f"bold {row_color}")
             else:
-                line.append(f"    {name}", style=theme.text)
+                line.append(f"    {name}", style=row_color)
 
             if orig_idx == playlist.index:
                 line.append(" [播放中]", style=theme.primary)

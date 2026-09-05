@@ -509,6 +509,22 @@ class App:
         if self._online_selector_index < len(self._online_tracks) - 1:
             self._online_selector_index += 1
 
+    def _online_toggle_like(self, track: OnlineTrack):
+        """按 ← 收藏/取消收藏当前歌曲（仅 QQ 平台）"""
+        if track.platform != "qq":
+            return
+        try:
+            if not self.online_mgr.qq_has_credential():
+                return
+            if track.liked:
+                ok = self.online_mgr.qq_unlike_song(track.song_id)
+            else:
+                ok = self.online_mgr.qq_like_song(track.song_id)
+            if ok:
+                track.liked = not track.liked
+        except Exception:
+            pass
+
     def _handle_online_key(self, key: str):
         if key == "ESC" or key == "o":
             if self._online_view == online_ui.VIEW_PLATFORM:
@@ -550,10 +566,11 @@ class App:
         elif v in (online_ui.VIEW_QQ_SEARCH, online_ui.VIEW_WY_SEARCH):
             self._handle_online_search_key(key, v)
 
-        elif v in (online_ui.VIEW_SONG_LIST, online_ui.VIEW_QQ_FAV_SONGS):
+        elif v in (online_ui.VIEW_SONG_LIST, online_ui.VIEW_QQ_FAV_SONGS,
+                    online_ui.VIEW_QQ_DAILY):
             self._handle_online_song_list_key(key)
 
-        elif v in (online_ui.VIEW_QQ_DAILY, online_ui.VIEW_QQ_PLAYLISTS,
+        elif v in (online_ui.VIEW_QQ_PLAYLISTS,
                     online_ui.VIEW_QQ_RANKINGS, online_ui.VIEW_WY_RANKINGS):
             self._handle_online_sub_list_key(key, v)
 
@@ -570,15 +587,17 @@ class App:
             self._online_push_view(online_ui.VIEW_QQ_DAILY)
             self._online_loading = True
             try:
-                self._online_sub_items = self.online_mgr.qq_get_recommend_playlists()
+                self._online_tracks = self.online_mgr.qq_get_daily_mix()
             except Exception:
-                self._online_sub_items = []
+                self._online_tracks = []
             self._online_loading = False
         elif idx == 2:  # 收藏歌曲
             self._online_push_view(online_ui.VIEW_QQ_FAV_SONGS)
             self._online_loading = True
             try:
                 self._online_tracks = self.online_mgr.qq_get_fav_songs()
+                for t in self._online_tracks:
+                    t.liked = True
             except Exception:
                 self._online_tracks = []
             self._online_loading = False
@@ -707,6 +726,8 @@ class App:
                                                   self._online_selector_index + 1)
         elif key == "RIGHT" and self._online_tracks and self._online_selector_index < len(self._online_tracks):
             self._add_online_to_queue(self._online_tracks[self._online_selector_index])
+        elif key == "LEFT" and self._online_tracks and self._online_selector_index < len(self._online_tracks):
+            self._online_toggle_like(self._online_tracks[self._online_selector_index])
         elif key == "\r" or key == "\n":
             if self._online_tracks and self._online_selector_index < len(self._online_tracks):
                 self._play_online_track(self._online_tracks[self._online_selector_index])
@@ -770,6 +791,8 @@ class App:
                                               self._online_selector_index + 1)
         elif key == "RIGHT" and self._online_selector_index < len(self._online_tracks):
             self._add_online_to_queue(self._online_tracks[self._online_selector_index])
+        elif key == "LEFT" and self._online_selector_index < len(self._online_tracks):
+            self._online_toggle_like(self._online_tracks[self._online_selector_index])
         elif key == "\r" or key == "\n":
             if self._online_selector_index < len(self._online_tracks):
                 self._play_online_track(self._online_tracks[self._online_selector_index])
@@ -792,7 +815,7 @@ class App:
                 self._online_push_view(online_ui.VIEW_SONG_LIST)
                 self._online_loading = True
                 try:
-                    if view == online_ui.VIEW_QQ_DAILY or view == online_ui.VIEW_QQ_PLAYLISTS:
+                    if view == online_ui.VIEW_QQ_PLAYLISTS:
                         self._online_tracks = self.online_mgr.qq_get_playlist_songs(dissid)
                     elif view == online_ui.VIEW_QQ_RANKINGS:
                         self._online_tracks = self.online_mgr.qq_get_top_songs(int(dissid))
@@ -844,10 +867,14 @@ class App:
                                                         self._online_tracks,
                                                         self._online_selector_index, w,
                                                         playlist=self.playlist)
-        if v in (online_ui.VIEW_QQ_DAILY, online_ui.VIEW_QQ_PLAYLISTS,
+        if v == online_ui.VIEW_QQ_DAILY:
+            return online_ui.build_online_song_list_ui(cfg, "每日推荐",
+                                                        self._online_tracks,
+                                                        self._online_selector_index, w,
+                                                        playlist=self.playlist)
+        if v in (online_ui.VIEW_QQ_PLAYLISTS,
                   online_ui.VIEW_QQ_RANKINGS, online_ui.VIEW_WY_RANKINGS):
-            title = {online_ui.VIEW_QQ_DAILY: "每日推荐",
-                     online_ui.VIEW_QQ_PLAYLISTS: "我的歌单",
+            title = {online_ui.VIEW_QQ_PLAYLISTS: "我的歌单",
                      online_ui.VIEW_QQ_RANKINGS: "排行榜",
                      online_ui.VIEW_WY_RANKINGS: "排行榜"}.get(v, "列表")
             return online_ui.build_online_playlist_list_ui(cfg, title,

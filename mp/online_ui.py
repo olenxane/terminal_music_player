@@ -4,7 +4,7 @@ from rich.console import Group
 from rich.text import Text
 from rich.cells import cell_len
 
-from .ui import _fit_text
+from .ui import _fit_text, _gradient_color
 
 
 # ---- 视图名常量 ----
@@ -22,6 +22,11 @@ VIEW_WY_DAILY = "wy_daily"
 VIEW_SONG_LIST = "song_list"
 VIEW_LOADING = "loading"
 VIEW_LOGIN = "login"
+
+# ---- 下载视图名常量 ----
+VIEW_DOWNLOAD_SEARCH = "download_search"
+VIEW_DOWNLOAD_PROGRESS = "download_progress"
+VIEW_DOWNLOAD_QUEUE = "download_queue"
 
 QQ_MENU = ["搜索歌曲", "每日推荐", "收藏歌曲", "我的歌单", "排行榜", "登录/退出"]
 WY_MENU = ["搜索歌曲", "排行榜", "每日推荐", "登录/退出"]
@@ -41,8 +46,11 @@ def _footer(text: str, theme) -> Text:
 
 def _render_list(items: list, selector_index: int, theme, width: int,
                   max_visible: int = 15, get_name=None,
-                  in_queue_fn=None) -> list:
-    """通用列表渲染，返回 Text 行列表"""
+                  in_queue_fn=None, gradient_items: bool = False) -> list:
+    """通用列表渲染，返回 Text 行列表
+
+    gradient_items=True 时，非选中行名称用左右渐变色（歌曲列表场景）。
+    """
     lines = []
     total = len(items)
     if total == 0:
@@ -58,10 +66,23 @@ def _render_list(items: list, selector_index: int, theme, width: int,
         name = get_name(items[i]) if get_name else str(items[i])
         name = _fit_text(name, width - 12)
         line = Text(no_wrap=True)
+        if gradient_items:
+            # 上下渐变：每行一个颜色，按可见窗口内的行位置取色
+            # （单行仍是一个样式段，不会增加每帧 SGR 段数）
+            visible = max(end - start - 1, 1)
+            row_color = _gradient_color((i - start) / visible,
+                                        theme.spectrum_gradient)
         if i == selector_index:
-            line.append(f"  ▶ {name}", style=f"bold {theme.accent}")
+            line.append(f"  ▶ ", style=f"bold {theme.accent}")
+            if gradient_items:
+                line.append(name, style=f"bold {row_color}")
+            else:
+                line.append(name, style=f"bold {theme.accent}")
         else:
-            line.append(f"    {name}", style=theme.text)
+            if gradient_items:
+                line.append(f"    {name}", style=row_color)
+            else:
+                line.append(f"    {name}", style=theme.primary)
         if in_queue_fn and in_queue_fn(items[i]):
             line.append(" [队列]", style=theme.secondary)
         lines.append(line)
@@ -96,6 +117,13 @@ def build_online_menu_ui(cfg, platform: str, menu_items: list,
     return Group(*lines)
 
 
+def _song_display_name(track) -> str:
+    """歌曲显示名：歌名-歌手 + [VIP] + ♥(已收藏)"""
+    liked = " ♥" if getattr(track, "liked", False) else ""
+    vip = " [VIP]" if getattr(track, "is_vip", False) else ""
+    return f"{track.title} - {track.artist}{liked}{vip}"
+
+
 def build_online_search_ui(cfg, platform: str, search_str: str,
                              tracks: list, selector_index: int,
                              width: int = 50, playlist=None) -> Group:
@@ -108,13 +136,11 @@ def build_online_search_ui(cfg, platform: str, search_str: str,
     search_line.append("█", style=theme.accent)
     lines.append(search_line)
     lines.append(Text("", style=""))
-    def _song_name(track):
-        vip = " [VIP]" if getattr(track, "is_vip", False) else ""
-        return f"{track.title} - {track.artist}{vip}"
     in_q = playlist.is_online_in_queue if playlist else None
     lines.extend(_render_list(tracks, selector_index, theme, width,
-                              get_name=_song_name, in_queue_fn=in_q))
-    lines.append(_footer("Enter: 立即播放  →: 加入队列  Esc: 返回", theme))
+                              get_name=_song_display_name, in_queue_fn=in_q,
+                              gradient_items=True))
+    lines.append(_footer("Enter: 立即播放  →: 加入队列  ←: 收藏  Esc: 返回", theme))
     return Group(*lines)
 
 
@@ -124,13 +150,11 @@ def build_online_song_list_ui(cfg, title: str, tracks: list,
     theme = cfg.theme
     lines = [_header(title, theme)]
     lines.append(Text("", style=""))
-    def _song_name(track):
-        vip = " [VIP]" if getattr(track, "is_vip", False) else ""
-        return f"{track.title} - {track.artist}{vip}"
     in_q = playlist.is_online_in_queue if playlist else None
     lines.extend(_render_list(tracks, selector_index, theme, width,
-                              get_name=_song_name, in_queue_fn=in_q))
-    lines.append(_footer("Enter: 立即播放  →: 加入队列  Esc: 返回", theme))
+                              get_name=_song_display_name, in_queue_fn=in_q,
+                              gradient_items=True))
+    lines.append(_footer("Enter: 立即播放  →: 加入队列  ←: 收藏  Esc: 返回", theme))
     return Group(*lines)
 
 
@@ -178,4 +202,101 @@ def build_online_login_ui(cfg, platform: str, qr_text: str = "",
     if status:
         lines.append(Text(f"  {status}", style=theme.secondary))
     lines.append(_footer("Esc: 取消", theme))
+    return Group(*lines)
+
+
+# ═══════════════════════════════════════════════════════════
+# 下载工具 UI 函数（供 music_downloader.py 使用）
+# ═══════════════════════════════════════════════════════════
+
+def build_download_search_ui(cfg, platform: str, search_str: str,
+                             tracks: list, selector_index: int,
+                             width: int = 50, queue_size: int = 0) -> Group:
+    """下载搜索界面：搜索栏 + 歌曲列表"""
+    theme = cfg.theme
+    name = "QQ音乐" if platform == "qq" else "网易云音乐"
+    lines = [_header(f"{name}下载", theme)]
+    search_line = Text(no_wrap=True)
+    search_line.append("搜索: ", style=theme.secondary)
+    search_line.append(search_str, style=theme.primary)
+    search_line.append("█", style=theme.accent)
+    lines.append(search_line)
+    lines.append(Text("", style=""))
+
+    def _song_name(track):
+        vip = " [VIP]" if getattr(track, "is_vip", False) else ""
+        return f"{track.title} - {track.artist}{vip}"
+
+    lines.extend(_render_list(tracks, selector_index, theme, width,
+                              get_name=_song_name, gradient_items=True))
+    footer_parts = [Text("Enter: 下载", style=theme.dim)]
+    footer_parts.append(Text("  →: 加入队列", style=theme.dim))
+    if queue_size > 0:
+        footer_parts.append(Text(f"  队列: {queue_size}首", style=theme.secondary))
+    footer_parts.append(Text("  Esc: 返回", style=theme.dim))
+    lines.append(Group(*footer_parts))
+    return Group(*lines)
+
+
+def _render_bar(pct: float, length: int = 30, filled_char: str = "█",
+                 empty_char: str = "░") -> str:
+    """渲染纯文本进度条"""
+    filled = int(round(pct * length))
+    return filled_char * filled + empty_char * (length - filled)
+
+
+def build_download_progress_ui(cfg, title: str, artist: str,
+                                pct: float, speed: str,
+                                total_mb: float, cur_mb: float,
+                                width: int = 50) -> Group:
+    """下载进度界面"""
+    theme = cfg.theme
+    lines = [_header("正在下载", theme)]
+    lines.append(Text("", style=""))
+
+    # 歌曲名（截断适配宽度）
+    name = f"{title} - {artist}"
+    lines.append(Text(f"  {_fit_text(name, width - 4)}", style=theme.primary))
+    lines.append(Text("", style=""))
+
+    # 进度条
+    bar_line = Text(no_wrap=True)
+    bar = _render_bar(pct / 100.0, 30)
+    bar_line.append(f"  [{bar}] {pct:5.1f}%", style=theme.accent)
+    lines.append(bar_line)
+
+    # 进度信息
+    info = Text(no_wrap=True)
+    info.append(f"  {cur_mb:.1f} MB / ", style=theme.text)
+    info.append(f"{total_mb:.1f} MB", style=theme.dim)
+    if speed:
+        info.append(f"  {speed}/s", style=theme.secondary)
+    lines.append(info)
+
+    if pct >= 100:
+        lines.append(Text("", style=""))
+        lines.append(Text("  ✓ 下载完成", style=f"bold {theme.accent}"))
+
+    return Group(*lines)
+
+
+def build_download_queue_ui(cfg, queue_items: list, selector_index: int,
+                             width: int = 50) -> Group:
+    """下载队列界面"""
+    theme = cfg.theme
+    lines = [_header("下载队列", theme)]
+    lines.append(Text("", style=""))
+
+    if not queue_items:
+        lines.append(Text("  队列为空", style=theme.dim))
+    else:
+        def _item_name(item):
+            status = item.get("status", "pending")
+            prefix = {"done": "✓", "downloading": "⬇", "failed": "✗",
+                      "pending": "○"}.get(status, "○")
+            return f"{prefix} {item.get('title', '')} - {item.get('artist', '')}"
+
+        lines.extend(_render_list(queue_items, selector_index, theme, width,
+                                  get_name=_item_name))
+    lines.append(_footer("Enter: 下载选中  →: 全部下载  Esc: 返回", theme))
     return Group(*lines)

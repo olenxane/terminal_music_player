@@ -68,16 +68,19 @@ def load_credential() -> Optional[Dict]:
         if cred_file.exists():
             try:
                 # 防御性权限检查：凭证文件应对其他用户不可读
-                try:
-                    mode = cred_file.stat().st_mode & 0o777
-                    if mode & 0o077:  # group/other 有任何权限位
-                        logger.warning(
-                            "凭证文件权限过宽 (0o%o)，自动修复为 0o600",
-                            mode,
-                        )
-                        os.chmod(cred_file, 0o600)
-                except OSError:
-                    pass
+                # 仅 POSIX 系统有效；Windows 不支持 POSIX 权限位，
+                # st_mode 恒为 0o666 且 chmod 无效，跳过以避免误报
+                if os.name == "posix":
+                    try:
+                        mode = cred_file.stat().st_mode & 0o777
+                        if mode & 0o077:  # group/other 有任何权限位
+                            logger.warning(
+                                "凭证文件权限过宽 (0o%o)，自动修复为 0o600",
+                                mode,
+                            )
+                            os.chmod(cred_file, 0o600)
+                    except OSError:
+                        pass
 
                 with open(cred_file, "rb") as f:
                     encrypted = f.read()

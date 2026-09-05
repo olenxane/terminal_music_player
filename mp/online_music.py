@@ -35,6 +35,9 @@ def _ensure_qq_import():
         QQMusicClient = _C
         qq_configure_paths = _cp
         QRLoginType = _QT
+        # 库日志静默：路由到 log/error.log，不输出到终端
+        from .logging_utils import attach_external_logger
+        attach_external_logger("qqmusicbox")
         _qq_imported = True
 
 
@@ -57,6 +60,7 @@ class OnlineTrack:
     platform: str            # "qq" / "wy"
     song_id: str             # QQ的mid / 网易的song_id
     is_vip: bool = False
+    liked: bool = False      # 是否已收藏（仅 QQ 平台有效）
     lyric_data: Optional[LyricsData] = None
 
     @property
@@ -163,6 +167,53 @@ class OnlineMusicManager:
         return [{"dissid": p.dissid, "name": p.name, "image_url": getattr(p, "image_url", "")}
                 for p in playlists]
 
+    def qq_get_daily_mix(self) -> list:
+        """获取QQ音乐每日30首个性化推荐
+
+        官方 /discover/daily-mix 接口返回的 H5 链接不能直接播放，
+        因此按歌名走搜索流程，取第一个搜索结果构造可播放的 OnlineTrack。
+        """
+        import requests
+
+        key_path = os.path.join(_QQ_DIR, "key")
+        try:
+            with open(key_path, "r", encoding="utf-8") as f:
+                api_key = f.read().strip()
+        except OSError:
+            return []
+        if not api_key:
+            return []
+
+        try:
+            resp = requests.post(
+                "https://a.y.qq.com/discover/daily-mix",
+                headers={"Authorization": f"Bearer {api_key}",
+                         "Content-Type": "application/json"},
+                json={"params": {}, "comm": {"skill_version": "0.0.2"}},
+                timeout=10,
+            )
+            data = resp.json()
+        except Exception:
+            return []
+
+        songlist = data.get("songlist") or []
+        client = self._ensure_qq()
+        tracks = []
+        for item in songlist:
+            title = item.get("songName", "").strip()
+            singer = item.get("singerName", "").strip()
+            if not title:
+                continue
+            keyword = f"{title} {singer}".strip()
+            try:
+                songs = self._async.run(client.search_songs(keyword, num=1))
+            except Exception:
+                songs = []
+            if not songs:
+                continue
+            tracks.append(self._qq_song_to_track(songs[0]))
+        return tracks
+
     def qq_get_playlist_songs(self, dissid: str) -> list:
         client = self._ensure_qq()
         songs = self._async.run(client.get_playlist_songs(dissid))
@@ -206,6 +257,10 @@ class OnlineMusicManager:
     def qq_unlike_song(self, song_mid: str) -> bool:
         client = self._ensure_qq()
         return self._async.run(client.unlike_song(song_mid))
+
+    def qq_is_song_liked(self, song_mid: str) -> bool:
+        client = self._ensure_qq()
+        return self._async.run(client.is_song_liked(song_mid))
 
     # ---------- 网易云功能 ----------
     def wy_get_toplists(self) -> list:

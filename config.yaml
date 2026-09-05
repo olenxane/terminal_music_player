@@ -1,7 +1,7 @@
 music_dirs:
 - E:\音画集\#新
 - E:\音画集\嘤乐
-lyrics_dir: ''
+lyrics_dir: E:/音画集/lyrics
 lyrics:
   fuzzy_match: true
   fuzzy_threshold: 0.55
@@ -26,11 +26,11 @@ equalizer:
     62Hz: 1.0
     125Hz: 1.0
     250Hz: 1.0
-    500Hz: 2.5
+    500Hz: 1.5
     1kHz: 1.0
     2kHz: 1.0
     4kHz: 1.0
-    8kHz: 4.0
+    8kHz: 2.5
     16kHz: 1.0
   presets:
     flat:
@@ -328,6 +328,11 @@ playback:
   playlist_mode: shuffle
   ui_fps: 24
   ui_width: 160
+  marquee:
+    enabled: true
+    hold_secs: 5.0
+    step_interval: 0.3
+    gap_cols: 4
 dsp:
   loudness:
     enabled: true

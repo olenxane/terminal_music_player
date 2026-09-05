@@ -91,12 +91,21 @@ class SpectrumConfig:
 
 
 @dataclass
+class MarqueeConfig:
+    enabled: bool = True          # 标题超宽时是否开启截断滚动（关闭则静态截断加 …）
+    hold_secs: float = 5.0        # 每轮滚动前截断态停留秒数
+    step_interval: float = 0.3    # 每滚动一列的秒数
+    gap_cols: int = 4             # 两轮滚动之间的空隙列数
+
+
+@dataclass
 class PlaybackConfig:
     default_volume: float = 0.8
     fade_ms: int = 150
     playlist_mode: str = "sequential"
     ui_fps: int = 20
     ui_width: int = 50
+    marquee: MarqueeConfig = field(default_factory=MarqueeConfig)
 
 
 @dataclass
@@ -256,12 +265,19 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> AppConfig:
     )
 
     pb_raw = raw.get("playback", {}) or {}
+    mq_raw = pb_raw.get("marquee", {}) or {}
     playback = PlaybackConfig(
         default_volume=float(pb_raw.get("default_volume", 0.8)),
         fade_ms=int(pb_raw.get("fade_ms", 150)),
         playlist_mode=pb_raw.get("playlist_mode", "sequential"),
         ui_fps=int(pb_raw.get("ui_fps", 20)),
         ui_width=max(30, int(pb_raw.get("ui_width", 50))),
+        marquee=MarqueeConfig(
+            enabled=bool(mq_raw.get("enabled", True)),
+            hold_secs=max(0.0, float(mq_raw.get("hold_secs", 5.0))),
+            step_interval=max(0.05, float(mq_raw.get("step_interval", 0.3))),
+            gap_cols=max(0, int(mq_raw.get("gap_cols", 4))),
+        ),
     )
 
     dsp_raw = raw.get("dsp", {}) or {}
