@@ -130,11 +130,14 @@ class Playlist:
         self._queue.append(track)
 
     def next_from_queue(self):
-        """弹出队列首项，推入缓冲栈，返回 int（本地索引）或 OnlineTrack（在线歌曲）"""
+        """弹出队列首项（纯弹出，不入缓冲栈），返回 int（本地索引）或 OnlineTrack（在线歌曲）。
+
+        缓冲栈由调用方维护：前进时先把当前曲目压栈（push_buffer），
+        后退时把当前曲目插回队首（push_queue_front），保证 n/p 对称无丢失。
+        """
         if not self._queue:
             return None
         item = self._queue.pop(0)
-        self._buffer_stack.append(item)
         self._from_queue = True
         if isinstance(item, int):
             self.index = item
@@ -147,6 +150,14 @@ class Playlist:
             return None
         item = self._queue.pop(0)
         return item
+
+    def push_buffer(self, item):
+        """把离开的当前曲目压入历史缓冲栈（n/p 前进时调用）"""
+        self._buffer_stack.append(item)
+
+    def push_queue_front(self, item):
+        """把离开的当前曲目插回队列首部（p 后退时调用，保证 n 可返回）"""
+        self._queue.insert(0, item)
 
     def prev_from_buffer(self):
         """从缓冲栈弹出末项（上一首），返回 int 或 OnlineTrack"""

@@ -1,7 +1,8 @@
-"""在线音乐管理器：封装QQ音乐（异步）和网易云音乐（同步）API"""
+"""在线音乐管理器：封装QQ音乐（异步）、网易云音乐（同步）和哔哩哔哩（异步）API"""
 from __future__ import annotations
 import asyncio
 import os
+import re
 import sys
 import threading
 from dataclasses import dataclass, field
@@ -20,11 +21,15 @@ for _d in (_QQ_DIR, _WY_DIR):
 # ---- 延迟导入标记 ----
 _qq_imported = False
 _wy_imported = False
+_bili_imported = False
 QQMusicClient = None
 qq_configure_paths = None
 QRLoginType = None
 MusicAPI = None
 MusicAPIError = None
+bili_client = None
+bili_auth = None
+bili_lyrics = None
 
 
 def _ensure_qq_import():
@@ -50,6 +55,20 @@ def _ensure_wy_import():
         _wy_imported = True
 
 
+def _ensure_bili_import():
+    global _bili_imported, bili_client, bili_auth, bili_lyrics
+    if not _bili_imported:
+        if _PROJECT_ROOT not in sys.path:
+            sys.path.insert(0, _PROJECT_ROOT)
+        from bili import client as _c, auth as _a, lyrics as _l
+        bili_client, bili_auth, bili_lyrics = _c, _a, _l
+        # 库日志静默：路由到 log/error.log，不输出到终端
+        from .logging_utils import attach_external_logger
+        for name in ("bili.client", "bili.auth", "bilibili_api"):
+            attach_external_logger(name)
+        _bili_imported = True
+
+
 @dataclass
 class OnlineTrack:
     """在线歌曲统一表示"""
@@ -57,15 +76,38 @@ class OnlineTrack:
     artist: str
     album: str
     duration_sec: float
-    platform: str            # "qq" / "wy"
-    song_id: str             # QQ的mid / 网易的song_id
+    platform: str            # "qq" / "wy" / "bili"
+    song_id: str             # QQ的mid / 网易的song_id / B站的bvid
     is_vip: bool = False
     liked: bool = False      # 是否已收藏（仅 QQ 平台有效）
     lyric_data: Optional[LyricsData] = None
+    stream_headers: Optional[dict] = None   # 直链所需 HTTP 请求头（B站需 Referer）
+    stream_urls_backup: Optional[list] = None  # 备用直链线路（B站多 CDN）
 
     @property
     def display_name(self) -> str:
         return f"{self.title} - {self.artist}"
+
+
+def _strip_html(text: str) -> str:
+    """剥离 B站搜索结果标题中的高亮标签（<em class="keyword"> 等）"""
+    return re.sub(r"<[^>]+>", "", text).strip()
+
+
+def _parse_bili_duration(raw) -> float:
+    """解析 B站时长字段：秒数（int/float）或 "MM:SS"/"H:MM:SS" 字符串"""
+    if isinstance(raw, (int, float)):
+        return float(raw or 0)
+    if isinstance(raw, str):
+        parts = raw.strip().split(":")
+        try:
+            if len(parts) == 2:
+                return int(parts[0]) * 60 + int(parts[1])
+            if len(parts) == 3:
+                return int(parts[0]) * 3600 + int(parts[1]) * 60 + int(parts[2])
+        except ValueError:
+            return 0.0
+    return 0.0
 
 
 class AsyncRunner:
@@ -93,13 +135,15 @@ class OnlineMusicManager:
     """在线音乐统一管理器"""
 
     def __init__(self, config_dir: str, qq_quality: int = 320,
-                 wy_quality: str = "exhigh"):
+                 wy_quality: str = "exhigh", bi_quality: int = 320):
         self._config_dir = config_dir
         self._qq_quality = qq_quality
         self._wy_quality = wy_quality
+        self._bi_quality = bi_quality
         self._async = AsyncRunner()
         self._qq_client = None
         self._wy_api = None
+        self._bili_ready = False
 
     # ---------- 客户端管理 ----------
     def _ensure_qq(self):
@@ -118,6 +162,18 @@ class OnlineMusicManager:
             self._wy_api = MusicAPI()
         return self._wy_api
 
+    def _ensure_bili(self):
+        """初始化 B站凭证目录（模块级导入由 _ensure_bili_import 完成一次）"""
+        if not self._bili_ready:
+            _ensure_bili_import()
+            bili_auth.configure_paths(os.path.join(self._config_dir, "bili"))
+            self._bili_ready = True
+            # 每进程一次：凭证需要刷新时自动续期（长期凭证轮换）
+            try:
+                bili_auth.maybe_auto_refresh()
+            except Exception:
+                pass
+
     def shutdown(self):
         self._async.shutdown()
 
@@ -127,6 +183,8 @@ class OnlineMusicManager:
             return self._qq_search(keyword, num)
         elif platform == "wy":
             return self._wy_search(keyword, num)
+        elif platform == "bili":
+            return self._bili_search(keyword, num)
         return []
 
     def _qq_search(self, keyword: str, num: int) -> list:
@@ -299,12 +357,14 @@ class OnlineMusicManager:
 
     # ---------- 播放URL获取 ----------
     def get_play_url(self, track: OnlineTrack) -> str:
-        """获取播放URL，QQ 320失败回退128"""
+        """获取播放URL，QQ 320失败回退128，B站音质阶梯自动回退"""
         try:
             if track.platform == "qq":
                 return self._qq_get_url(track.song_id)
             elif track.platform == "wy":
                 return self._wy_get_url(track.song_id)
+            elif track.platform == "bili":
+                return self._bili_get_url(track)
         except Exception as e:
             from .logging_utils import log_error
             log_error(f"获取在线歌曲播放URL异常: [{track.platform}] {track.title} - {e}")
@@ -330,6 +390,17 @@ class OnlineMusicManager:
             except Exception:
                 return ""
 
+    def _bili_get_url(self, track: OnlineTrack) -> str:
+        self._ensure_bili()
+        cred = bili_auth.get_credential(mode="optional")
+        urls = self._async.run(
+            bili_client.get_audio_urls(track.song_id, credential=cred,
+                                       max_quality=self._bi_quality)
+        )
+        # 备用线路存到 track，供 _load_online_track 在主线路失败时遍历
+        track.stream_urls_backup = urls[1:]
+        return urls[0] if urls else ""
+
     # ---------- 歌词获取 ----------
     def get_lyrics(self, track: OnlineTrack) -> Optional[LyricsData]:
         if track.lyric_data is not None:
@@ -339,6 +410,8 @@ class OnlineMusicManager:
             result = self._qq_get_lyrics(track.song_id)
         elif track.platform == "wy":
             result = self._wy_get_lyrics(track.song_id)
+        elif track.platform == "bili":
+            result = self._bili_get_lyrics(track.song_id)
         if result is not None:
             track.lyric_data = result
         return result
@@ -367,6 +440,160 @@ class OnlineMusicManager:
         except Exception:
             return None
 
+    # ---------- Bilibili 功能 ----------
+    def _bili_video_to_track(self, item: dict) -> OnlineTrack:
+        """B站视频条目（搜索/热门/收藏/视频信息）→ OnlineTrack"""
+        owner = item.get("owner") or {}
+        upper = item.get("upper") or {}
+        title = _strip_html(str(item.get("title", "") or "未知标题"))
+        artist = (item.get("author") or upper.get("name")
+                  or owner.get("name") or "未知UP主")
+        return OnlineTrack(
+            title=title[:80],
+            artist=str(artist)[:30],
+            album="",
+            duration_sec=_parse_bili_duration(item.get("duration", 0)),
+            platform="bili",
+            song_id=str(item.get("bvid", "")),
+            stream_headers=dict(bili_client.STREAM_HEADERS),
+        )
+
+    def _bili_search(self, keyword: str, num: int) -> list:
+        self._ensure_bili()
+        results = self._async.run(bili_client.search_video(keyword, page=1))
+        videos = [r for r in results if r.get("bvid")][:num]
+        return [self._bili_video_to_track(v) for v in videos]
+
+    def _bili_get_lyrics(self, bvid: str) -> Optional[LyricsData]:
+        """B站字幕 → LRC → LyricsData（无字幕/无凭证返回 None）"""
+        self._ensure_bili()
+        try:
+            _, items = self._async.run(bili_client.get_video_subtitle(bvid))
+        except Exception as e:
+            from .logging_utils import log_warning
+            log_warning(f"获取B站字幕失败: {bvid} - {e}")
+            return None
+        lrc_text = bili_lyrics.subtitle_to_lrc(items)
+        if not lrc_text:
+            return None
+        lines = _parse_lrc_text(lrc_text)
+        if not lines:
+            return None
+        return LyricsData(lines=lines, source_path=None,
+                          match_type="online", similarity=1.0)
+
+    def bili_search_users(self, keyword: str, num: int = 20) -> list:
+        """搜索UP主，返回 [{"mid","uname","fans","videos","usign"}]"""
+        self._ensure_bili()
+        results = self._async.run(bili_client.search_user(keyword, page=1))
+        users = []
+        for u in results[:num]:
+            users.append({
+                "mid": str(u.get("mid", "")),
+                "uname": u.get("uname", "") or "未知用户",
+                "fans": u.get("fans", 0) or 0,
+                "videos": u.get("videos", 0) or 0,
+                "usign": _strip_html(str(u.get("usign", "") or ""))[:30],
+            })
+        return users
+
+    def bili_get_user_videos(self, uid, count: int = 30) -> list:
+        """获取UP主的视频列表"""
+        self._ensure_bili()
+        videos = self._async.run(
+            bili_client.get_user_videos(int(uid), count=count, credential=None)
+        )
+        return [self._bili_video_to_track(v) for v in videos]
+
+    def bili_get_hot_recommend(self, page: int = 1, per_page: int = 20) -> dict:
+        """热门视频（编辑榜单，天级更新）。返回 {"items","page","has_more"}"""
+        self._ensure_bili()
+        data = self._async.run(bili_client.get_hot_videos(pn=page, ps=per_page))
+        vlist = data.get("list") or []
+        return {
+            "items": [self._bili_video_to_track(v) for v in vlist],
+            "page": page,
+            "has_more": len(vlist) >= per_page,
+        }
+
+    def bili_get_rcmd(self, page: int = 1, per_page: int = 12) -> dict:
+        """首页个性化推荐流（每次请求返回不同内容；有账号时按账号个性化）。
+
+        返回 {"items","page","has_more"}，推荐流近乎无限，has_more 恒真。
+        """
+        self._ensure_bili()
+        cred = bili_auth.get_credential(mode="optional")
+        items = self._async.run(
+            bili_client.get_recommend_videos(page=page, per_page=per_page,
+                                             credential=cred)
+        )
+        return {"items": [self._bili_video_to_track(v) for v in items],
+                "page": page, "has_more": True}
+
+    def bili_get_favorite_folders(self) -> list:
+        """获取登录用户的收藏夹列表 [{"fid","name","count"}]（需登录）"""
+        self._ensure_bili()
+        cred = bili_auth.get_credential(mode="read")
+        folders = self._async.run(bili_client.get_favorite_list(cred))
+        return [{
+            "fid": str(f.get("id", "")),
+            "name": f.get("title", "") or "未命名收藏夹",
+            "count": f.get("media_count", 0) or 0,
+        } for f in folders]
+
+    def bili_get_favorite_videos(self, fid: str, page: int = 1) -> dict:
+        """获取收藏夹内容（需登录）。返回 {"items": [OnlineTrack], "has_more": bool}"""
+        self._ensure_bili()
+        cred = bili_auth.get_credential(mode="read")
+        data = self._async.run(
+            bili_client.get_favorite_videos(int(fid), cred, page=page)
+        )
+        medias = data.get("medias") or []
+        return {
+            "items": [self._bili_video_to_track(m) for m in medias],
+            "has_more": bool(data.get("has_more")),
+        }
+
+    def bili_login_qr_start(self) -> dict:
+        """生成B站扫码登录二维码。返回 {"data": PNG字节, "qr_link": 链接}（与QQ结构一致）"""
+        self._ensure_bili()
+        session = bili_auth.get_qr_login_session()
+        result = self._async.run(session.start())
+        return {"data": result.get("qr_png", b""),
+                "qr_link": result.get("qr_link", "")}
+
+    def bili_login_qr_check(self) -> dict:
+        """查询B站扫码状态一次。{"status": waiting|scanned|success|expired|error}"""
+        self._ensure_bili()
+        session = bili_auth.get_qr_login_session()
+        try:
+            return self._async.run(session.check())
+        except Exception as e:
+            return {"status": "error", "message": str(e)}
+
+    def bili_has_credential(self) -> bool:
+        """是否有已保存凭证（不联网）"""
+        self._ensure_bili()
+        return bili_auth.has_credential()
+
+    def import_bili_cookies(self, path: str) -> tuple:
+        """从 Netscape cookies.txt 导入B站凭证（备用登录通道）。返回 (成功?, 消息)"""
+        self._ensure_bili()
+        return bili_auth.import_cookies_txt(path)
+
+    def bili_is_logged_in(self) -> bool:
+        """联网校验凭证是否有效"""
+        self._ensure_bili()
+        try:
+            return bili_auth.is_logged_in()
+        except Exception:
+            return False
+
+    def bili_logout(self) -> bool:
+        """清除B站凭证"""
+        self._ensure_bili()
+        return bili_auth.logout()
+
     # ---------- 登录 ----------
     def qq_login_qr_start(self) -> dict:
         """获取 QQ音乐手机APP 扫码登录二维码"""
@@ -380,30 +607,20 @@ class OnlineMusicManager:
         return result or {}
 
     @staticmethod
-    def render_qr_ascii(data: bytes, width: int = 44) -> str:
-        """把二维码 PNG 二进制渲染成终端 ASCII 字符画（可扫码）"""
-        from PIL import Image
-        import io
+    def render_qr_ascii(data: bytes, encoding: str | None = None) -> str:
+        """把二维码 PNG 渲染为终端字符（原生模块分辨率，可扫码）。
+
+        encoding 传显示端实际编码（如 rich console 的 .encoding）：
+        ▀▄█ 可编码时输出紧凑二维码；否则返回 ""，由调用方提示打开 PNG 文件。
+        """
+        from . import qr_terminal
         try:
-            img = Image.open(io.BytesIO(data)).convert("L")
-        except Exception:
+            matrix = qr_terminal.matrix_from_png(data)
+        except Exception as e:
+            from .logging_utils import log_warning
+            log_warning(f"二维码网格解析失败: {e}")
             return ""
-        img = img.point(lambda p: 255 if p > 128 else 0)
-        w, h = img.size
-        if w == 0 or h == 0:
-            return ""
-        cell_w = max(1, w // width)
-        cell_h = max(1, cell_w * 2)
-        rows = []
-        for y in range(0, h, cell_h):
-            line_chars = []
-            for x in range(0, w, cell_w):
-                block = img.crop((x, y, min(x + cell_w, w), min(y + cell_h, h)))
-                px = list(block.getdata())
-                black = sum(1 for p in px if p < 128)
-                line_chars.append("█" if black * 2 >= len(px) else " ")
-            rows.append("".join(line_chars).rstrip())
-        return "\n".join(rows)
+        return qr_terminal.render_terminal_qr(matrix, encoding=encoding)
 
     @staticmethod
     def save_qr_png(data: bytes, path: str) -> str:

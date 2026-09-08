@@ -138,6 +138,7 @@ class DspConfig:
 class OnlineMusicConfig:
     qq_quality: int = 320          # 128 或 320
     wy_quality: str = "exhigh"     # standard/higher/exhigh/lossless/hires
+    bi_quality: int = 320          # B站音频音质上限：320=尽力最高(实际192K)/192/132/64
 
 
 @dataclass
@@ -315,6 +316,7 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> AppConfig:
     online_music = OnlineMusicConfig(
         qq_quality=int(om_raw.get("qq_quality", 320)),
         wy_quality=om_raw.get("wy_quality", "exhigh"),
+        bi_quality=int(om_raw.get("bi_quality", 320)),
     )
 
     return AppConfig(

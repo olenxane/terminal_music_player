@@ -37,6 +37,16 @@ _FFMPEG_BIN = None
 _FFPROBE_BIN = None
 
 
+def _build_header_args(headers: Optional[dict]) -> list:
+    """把请求头 dict 转为 ffmpeg `-headers` 输入选项参数（非 HTTP 源返回空）。"""
+    if not headers:
+        return []
+    lines = "".join(f"{k}: {v}\r\n" for k, v in headers.items())
+    if not lines:
+        return []
+    return ["-headers", lines]
+
+
 def ffmpeg_available() -> bool:
     global _FFMPEG_BIN
     if _FFMPEG_BIN is None:
@@ -64,9 +74,12 @@ class FFmpegAudioFile:
 
     seek 通过重启 ffmpeg -ss 实现。适用于 sounddevice 回调式播放。
     仅支持 float32 输出（与 Player 的回调一致）。
+
+    headers: 可选 HTTP 请求头 dict（如 B站直链的 Referer/UA），
+    以 ffmpeg -headers 输入选项传入（对本地路径无影响）。
     """
 
-    def __init__(self, path: str):
+    def __init__(self, path: str, headers: Optional[dict] = None):
         if not ffmpeg_available():
             raise RuntimeError(
                 "未找到 ffmpeg。请安装 ffmpeg，或运行 pip install imageio-ffmpeg"
@@ -74,6 +87,7 @@ class FFmpegAudioFile:
         self._path = path
         self._proc: Optional[subprocess.Popen] = None
         self._start_offset_sec = 0.0
+        self._header_args = _build_header_args(headers)
 
         self.samplerate: int = 0
         self.channels: int = 0
@@ -95,6 +109,7 @@ class FFmpegAudioFile:
     def _probe_with_ffprobe(self, path: str):
         cmd = [
             _FFPROBE_BIN, "-v", "quiet",
+            *self._header_args,
             "-print_format", "json",
             "-show_streams", "-show_format", path,
         ]
@@ -118,7 +133,7 @@ class FFmpegAudioFile:
             pass
 
     def _probe_with_ffmpeg(self, path: str):
-        cmd = [_get_ffmpeg_bin(), "-i", path, "-f", "null", "-"]
+        cmd = [_get_ffmpeg_bin(), *self._header_args, "-i", path, "-f", "null", "-"]
         try:
             r = subprocess.run(
                 cmd, capture_output=True, encoding="utf-8", errors="replace",
@@ -150,6 +165,7 @@ class FFmpegAudioFile:
         self._start_offset_sec = start_sec
         cmd = [
             _get_ffmpeg_bin(),
+            *self._header_args,
             "-ss", f"{start_sec}",
             "-i", self._path,
             "-f", "f32le", "-acodec", "pcm_f32le",

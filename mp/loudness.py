@@ -3,6 +3,7 @@
 """
 from __future__ import annotations
 import math
+import threading
 import numpy as np
 from typing import Optional
 
@@ -70,9 +71,12 @@ class LoudnessAnalyzer:
         b_rlb, a_rlb = _high_pass_coeffs(38.0, 0.5, fs)
         return (b_pre, a_pre), (b_rlb, a_rlb)
 
-    def measure(self, audio_path: str, fs: int, channels: int) -> tuple:
+    def measure(self, audio_path: str, fs: int, channels: int,
+                headers: dict | None = None,
+                cancel_event: Optional[threading.Event] = None) -> tuple:
         """分析整曲响度，返回 (measured_lufs, gain_db)。
-        失败时返回 (-inf, 0.0)。"""
+        失败时返回 (-inf, 0.0)。headers 透传给 FFmpegAudioFile（在线直链需要）。
+        cancel_event 置位时提前终止分析并关闭 ffmpeg 子进程。"""
         if not _HAS_SCIPY:
             return float("-inf"), 0.0
 
@@ -94,12 +98,14 @@ class LoudnessAnalyzer:
         overlap_buf = np.zeros((0, channels), dtype=np.float32)
 
         try:
-            f = FFmpegAudioFile(audio_path)
+            f = FFmpegAudioFile(audio_path, headers=headers)
         except Exception:
             return float("-inf"), 0.0
 
         try:
             while True:
+                if cancel_event is not None and cancel_event.is_set():
+                    return float("-inf"), 0.0
                 chunk = f.read(block_size, dtype="float32", always_2d=True)
                 if chunk.shape[0] == 0:
                     break

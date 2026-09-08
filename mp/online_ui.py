@@ -19,6 +19,11 @@ VIEW_WY_HOME = "wy_home"
 VIEW_WY_SEARCH = "wy_search"
 VIEW_WY_RANKINGS = "wy_rankings"
 VIEW_WY_DAILY = "wy_daily"
+VIEW_BILI_HOME = "bili_home"
+VIEW_BILI_SEARCH = "bili_search"
+VIEW_BILI_USER_SEARCH = "bili_user_search"
+VIEW_BILI_RECOMMEND = "bili_recommend"
+VIEW_BILI_FAVORITES = "bili_favorites"
 VIEW_SONG_LIST = "song_list"
 VIEW_LOADING = "loading"
 VIEW_LOGIN = "login"
@@ -30,6 +35,17 @@ VIEW_DOWNLOAD_QUEUE = "download_queue"
 
 QQ_MENU = ["搜索歌曲", "每日推荐", "收藏歌曲", "我的歌单", "排行榜", "登录/退出"]
 WY_MENU = ["搜索歌曲", "排行榜", "每日推荐", "登录/退出"]
+BILI_MENU = ["搜索视频", "UP主搜索", "热门", "首页推荐", "我的收藏", "导入Cookie", "登录/退出"]
+
+# 列表可视行数（粘性视口的窗口大小，_render_list 默认值保持一致）
+LIST_MAX_VISIBLE = 15
+
+# 平台标识 → 显示名（替代原先 "qq" 二元写死的写法）
+PLATFORM_NAMES = {"qq": "QQ音乐", "wy": "网易云音乐", "bili": "哔哩哔哩"}
+
+
+def platform_display_name(platform: str) -> str:
+    return PLATFORM_NAMES.get(platform, platform)
 
 
 def _header(title: str, theme, subtitle: str = "") -> Text:
@@ -46,10 +62,14 @@ def _footer(text: str, theme) -> Text:
 
 def _render_list(items: list, selector_index: int, theme, width: int,
                   max_visible: int = 15, get_name=None,
-                  in_queue_fn=None, gradient_items: bool = False) -> list:
+                  in_queue_fn=None, gradient_items: bool = False,
+                  view_start: int | None = None) -> list:
     """通用列表渲染，返回 Text 行列表
 
     gradient_items=True 时，非选中行名称用左右渐变色（歌曲列表场景）。
+    view_start 不为 None 时使用"粘性视口"：窗口首行由调用方维护，
+    仅在选择器越出视口边缘时滚动（大列表尾部追加内容不会引起窗口跳动）；
+    为 None 时保持旧的"以选中项为中心"逻辑。
     """
     lines = []
     total = len(items)
@@ -57,10 +77,14 @@ def _render_list(items: list, selector_index: int, theme, width: int,
         lines.append(Text("  无结果", style=theme.dim))
         return lines
 
-    start = max(0, selector_index - max_visible // 2)
+    if view_start is not None:
+        start = max(0, min(view_start, max(0, total - max_visible)))
+    else:
+        start = max(0, selector_index - max_visible // 2)
+        end = min(total, start + max_visible)
+        if end - start < max_visible and start > 0:
+            start = max(0, end - max_visible)
     end = min(total, start + max_visible)
-    if end - start < max_visible and start > 0:
-        start = max(0, end - max_visible)
 
     for i in range(start, end):
         name = get_name(items[i]) if get_name else str(items[i])
@@ -96,7 +120,7 @@ def build_online_platform_ui(cfg, selector_index: int, width: int = 50) -> Group
     theme = cfg.theme
     lines = [_header("在线音乐", theme)]
     lines.append(Text("", style=""))
-    platforms = ["QQ音乐", "网易云音乐"]
+    platforms = ["QQ音乐", "网易云音乐", "哔哩哔哩"]
     lines.extend(_render_list(platforms, selector_index, theme, width,
                               get_name=lambda x: x))
     lines.append(_footer("Enter: 选择  Esc: 返回", theme))
@@ -107,7 +131,7 @@ def build_online_menu_ui(cfg, platform: str, menu_items: list,
                           selector_index: int, logged_in: bool = False,
                           user_name: str = "", width: int = 50) -> Group:
     theme = cfg.theme
-    name = "QQ音乐" if platform == "qq" else "网易云音乐"
+    name = platform_display_name(platform)
     sub = f"[{'已登录: ' + user_name if logged_in else '未登录'}]"
     lines = [_header(name, theme, sub)]
     lines.append(Text("", style=""))
@@ -128,7 +152,7 @@ def build_online_search_ui(cfg, platform: str, search_str: str,
                              tracks: list, selector_index: int,
                              width: int = 50, playlist=None) -> Group:
     theme = cfg.theme
-    name = "QQ音乐" if platform == "qq" else "网易云音乐"
+    name = platform_display_name(platform)
     lines = [_header(f"{name}搜索", theme)]
     search_line = Text(no_wrap=True)
     search_line.append("搜索: ", style=theme.secondary)
@@ -144,16 +168,38 @@ def build_online_search_ui(cfg, platform: str, search_str: str,
     return Group(*lines)
 
 
+def build_online_user_search_ui(cfg, search_str: str, users: list,
+                                selector_index: int, width: int = 50) -> Group:
+    """B站UP主搜索界面：搜索栏 + 用户列表（Enter 查看该UP主视频）"""
+    theme = cfg.theme
+    lines = [_header("哔哩哔哩UP主搜索", theme)]
+    search_line = Text(no_wrap=True)
+    search_line.append("搜索: ", style=theme.secondary)
+    search_line.append(search_str, style=theme.primary)
+    search_line.append("█", style=theme.accent)
+    lines.append(search_line)
+    lines.append(Text("", style=""))
+
+    def _user_name(u):
+        return (f"{u.get('uname', '')}  "
+                f"(粉丝 {u.get('fans', 0)} · 视频 {u.get('videos', 0)})")
+
+    lines.extend(_render_list(users, selector_index, theme, width,
+                              get_name=_user_name))
+    lines.append(_footer("Enter: 查看该UP主视频  Esc: 返回", theme))
+    return Group(*lines)
+
+
 def build_online_song_list_ui(cfg, title: str, tracks: list,
                                selector_index: int, width: int = 50,
-                               playlist=None) -> Group:
+                               playlist=None, view_start: int | None = None) -> Group:
     theme = cfg.theme
     lines = [_header(title, theme)]
     lines.append(Text("", style=""))
     in_q = playlist.is_online_in_queue if playlist else None
     lines.extend(_render_list(tracks, selector_index, theme, width,
                               get_name=_song_display_name, in_queue_fn=in_q,
-                              gradient_items=True))
+                              gradient_items=True, view_start=view_start))
     lines.append(_footer("Enter: 立即播放  →: 加入队列  ←: 收藏  Esc: 返回", theme))
     return Group(*lines)
 
@@ -191,7 +237,7 @@ def build_online_loading_ui(cfg, message: str = "加载中...") -> Group:
 def build_online_login_ui(cfg, platform: str, qr_text: str = "",
                           status: str = "", width: int = 50) -> Group:
     theme = cfg.theme
-    name = "QQ音乐" if platform == "qq" else "网易云音乐"
+    name = platform_display_name(platform)
     lines = [_header(f"{name}登录", theme)]
     lines.append(Text("", style=""))
     if qr_text:
@@ -214,7 +260,7 @@ def build_download_search_ui(cfg, platform: str, search_str: str,
                              width: int = 50, queue_size: int = 0) -> Group:
     """下载搜索界面：搜索栏 + 歌曲列表"""
     theme = cfg.theme
-    name = "QQ音乐" if platform == "qq" else "网易云音乐"
+    name = platform_display_name(platform)
     lines = [_header(f"{name}下载", theme)]
     search_line = Text(no_wrap=True)
     search_line.append("搜索: ", style=theme.secondary)

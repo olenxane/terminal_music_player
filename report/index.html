@@ -1,0 +1,469 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>听歌报告</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>♫</text></svg>">
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #f5f3ec;
+    --card: #fffefa;
+    --ink: #3c3a33;
+    --muted: #98917f;
+    --faint: #b8b09c;
+    --line: #e6e1d3;
+    --primary: #4a6b8a;
+    --sage: #7b9a8b;
+    --accent: #c99a5b;
+    --radius: 16px;
+    --shadow: 0 1px 2px rgba(70, 60, 40, .05), 0 10px 30px rgba(70, 60, 40, .06);
+    --serif: "Noto Serif SC", "Source Han Serif SC", "STZhongsong", "SimSun", serif;
+  }
+  body {
+    font-family: "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", "Segoe UI", sans-serif;
+    color: var(--ink);
+    line-height: 1.65;
+    min-height: 100vh;
+    background:
+      radial-gradient(1100px 480px at 50% -120px, #fdfcf7 0%, rgba(253, 252, 247, 0) 70%),
+      var(--bg);
+  }
+  .page { max-width: 920px; margin: 0 auto; padding: 52px 22px 64px; }
+
+  /* ---- 头部 ---- */
+  .hero { text-align: center; margin-bottom: 40px; }
+  .ornament { color: var(--accent); font-size: 12px; letter-spacing: 6px; margin-bottom: 14px; }
+  .ornament::before, .ornament::after { content: ""; display: inline-block; width: 56px; height: 1px;
+    background: linear-gradient(to right, transparent, var(--line), transparent); vertical-align: middle; margin: 0 14px; }
+  .hero h1 {
+    font-family: var(--serif); font-size: 34px; font-weight: 600;
+    letter-spacing: 16px; text-indent: 16px; color: #37424b;
+  }
+  .hero .range { color: var(--muted); font-size: 13px; letter-spacing: 3px; margin-top: 10px; }
+  .hero .hero-line { font-family: var(--serif); font-size: 17px; color: #5c6a63; margin-top: 16px; }
+  .hero .hero-line b { color: var(--primary); font-weight: 600; padding: 0 2px; }
+
+  /* ---- 概览卡片 ---- */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(165px, 1fr)); gap: 14px; margin-bottom: 36px; }
+  .card { background: var(--card); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: var(--shadow); }
+  .stat { padding: 22px 16px 18px; text-align: center; }
+  .stat .num { font-family: var(--serif); font-size: 31px; font-weight: 600; color: var(--primary); line-height: 1.2; }
+  .stat .num small { font-size: 13px; color: var(--muted); font-weight: 400; margin-left: 3px; }
+  .stat .lab { font-size: 12.5px; color: var(--muted); letter-spacing: 4px; text-indent: 4px; margin-top: 6px; }
+  .stat .sub { font-size: 11.5px; color: var(--faint); margin-top: 2px; }
+
+  /* ---- 分区 ---- */
+  .section { margin-bottom: 32px; }
+  .section h2 {
+    display: flex; align-items: center; gap: 12px; margin-bottom: 14px;
+    font-family: var(--serif); font-size: 17px; font-weight: 600;
+    letter-spacing: 5px; color: #4b5560;
+  }
+  .section h2::before { content: ""; width: 6px; height: 6px; background: var(--accent); transform: rotate(45deg); flex: none; }
+  .section h2::after { content: ""; flex: 1; height: 1px; background: linear-gradient(to right, var(--line) 55%, transparent); }
+  .pad { padding: 22px 24px; }
+  .note { padding: 0 24px 18px; font-size: 11.5px; color: var(--faint); }
+
+  /* ---- 每日趋势图 ---- */
+  .chart-wrap { position: relative; padding: 6px 6px 0; }
+  .chart-wrap svg { display: block; width: 100%; }
+  .dbar { fill: url(#gradBar); transition: fill .15s; cursor: pointer; }
+  .dbar:hover { fill: #4a6b8a; }
+  .xlabel { font-size: 10.5px; fill: #a49c89; text-anchor: middle; font-family: inherit; }
+  .chart-tip {
+    position: absolute; pointer-events: none; z-index: 5; white-space: nowrap;
+    background: #3f4a45; color: #f7f5ee; font-size: 12px; line-height: 1.6;
+    padding: 7px 13px; border-radius: 8px; box-shadow: 0 6px 18px rgba(0, 0, 0, .18);
+    transform: translate(-50%, calc(-100% - 10px));
+  }
+  .chart-tip b { font-weight: 600; }
+
+  /* ---- Top 榜单 ---- */
+  .song-list { list-style: none; padding: 8px 0; }
+  .song-row { display: flex; align-items: center; gap: 14px; padding: 10px 24px; transition: background .15s; }
+  .song-row:hover { background: #faf8f1; }
+  .rank { font-family: var(--serif); font-size: 17px; color: #bcb49e; width: 24px; text-align: center; flex: none; }
+  .rank.top { color: var(--accent); }
+  .song-main { flex: 1; min-width: 0; }
+  .song-title { font-size: 14.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .song-sub { font-size: 11px; color: var(--faint); margin-top: 3px; letter-spacing: .5px; }
+  .song-bar { height: 4px; background: #f0ece0; border-radius: 2px; margin-top: 7px; overflow: hidden; }
+  .song-bar i { display: block; height: 100%; border-radius: 2px;
+    background: linear-gradient(to right, var(--sage), var(--primary)); }
+  .song-count { flex: none; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* ---- 一周节奏 ---- */
+  .week-grid { display: grid; grid-template-columns: repeat(7, 1fr); gap: 10px; padding: 24px 24px 16px; }
+  .wcol { text-align: center; }
+  .wval { font-size: 11px; color: #a49c89; margin-bottom: 6px; font-variant-numeric: tabular-nums; }
+  .wzone { height: 112px; display: flex; align-items: flex-end; justify-content: center; }
+  .wbar { width: min(34px, 72%); min-height: 4px; border-radius: 6px 6px 3px 3px;
+    background: linear-gradient(to top, var(--sage), #a9c2b4); transition: height .6s ease; }
+  .wcol.weekend .wbar { background: linear-gradient(to top, #d3a874, #e3cda4); }
+  .wlabel { font-size: 12px; color: var(--muted); margin-top: 9px; letter-spacing: 1px; }
+
+  /* ---- 听歌时段 ---- */
+  .hour-grid { display: flex; align-items: flex-end; gap: 3px; height: 118px; padding: 26px 24px 4px; }
+  .hzone { flex: 1; height: 100%; display: flex; align-items: flex-end; }
+  .hbar { flex: 1; min-height: 3px; border-radius: 3px 3px 0 0;
+    background: linear-gradient(to top, #9db8a6, #c9d8cf); transition: height .6s ease; }
+  .hbar.peak { background: linear-gradient(to top, var(--accent), #e3cda4); }
+  .hour-labels { display: flex; gap: 3px; padding: 6px 24px 4px; }
+  .hl { flex: 1; text-align: center; font-size: 10.5px; color: #a49c89; }
+
+  /* ---- 来源分布 ---- */
+  .plat-list { list-style: none; padding: 10px 0; }
+  .plat-row { display: flex; align-items: center; gap: 14px; padding: 9px 24px; }
+  .plat-name { width: 96px; flex: none; font-size: 14px; color: #57523f; }
+  .plat-bar { flex: 1; height: 8px; background: #f0ece0; border-radius: 4px; overflow: hidden; }
+  .plat-bar i { display: block; height: 100%; border-radius: 4px;
+    background: linear-gradient(to right, #d3a874, #e3cda4); }
+  .plat-count { flex: none; font-size: 12.5px; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  /* ---- 声源标签 ---- */
+  .pills { display: flex; flex-wrap: wrap; gap: 10px; padding: 22px 24px 8px; }
+  .pill { border: 1px solid var(--line); background: #fbf9f3; border-radius: 999px; padding: 5px 15px;
+    font-size: 13px; color: #5c6157; transition: border-color .15s, color .15s; }
+  .pill:hover { border-color: var(--sage); color: var(--primary); }
+  .pill b { color: var(--primary); font-weight: 600; margin-left: 7px; font-size: 11.5px; }
+
+  /* ---- 小记 ---- */
+  .highlights { list-style: none; padding: 20px 26px; }
+  .highlights li { padding: 7px 0; font-size: 14.5px; color: #57523f; }
+  .highlights li::before { content: "◆"; color: var(--accent); font-size: 8px; margin-right: 13px; vertical-align: 2px; }
+
+  /* ---- 页脚与状态 ---- */
+  .foot { text-align: center; color: var(--faint); font-size: 12px; margin-top: 46px; letter-spacing: 1.5px; }
+  .state { text-align: center; color: var(--muted); padding: 80px 0; font-size: 14px; letter-spacing: 3px; }
+
+  @media (max-width: 560px) {
+    .page { padding-top: 36px; }
+    .hero h1 { font-size: 26px; letter-spacing: 9px; text-indent: 9px; }
+    .hero .hero-line { font-size: 15px; }
+    .pad, .pills, .highlights, .song-row, .week-grid { padding-left: 16px; padding-right: 16px; }
+  }
+</style>
+</head>
+<body>
+<main class="page">
+  <header class="hero">
+    <div class="ornament">✦</div>
+    <h1>听歌报告</h1>
+    <p class="range" id="hero-range"></p>
+    <p class="hero-line" id="hero-line"></p>
+  </header>
+
+  <section class="cards" id="cards"></section>
+
+  <section class="section">
+    <h2>每日收听</h2>
+    <div class="card chart-card">
+      <div class="chart-wrap" id="daily-chart"></div>
+      <div class="chart-tip" id="chart-tip" hidden></div>
+    </div>
+  </section>
+
+  <section class="section">
+    <h2>最常播放</h2>
+    <div class="card"><ol class="song-list" id="top-songs"></ol></div>
+  </section>
+
+  <section class="section">
+    <h2>一周节奏</h2>
+    <div class="card"><div class="week-grid" id="week"></div></div>
+  </section>
+
+  <section class="section" id="hours-section" hidden>
+    <h2>听歌时段</h2>
+    <div class="card">
+      <div class="hour-grid" id="hours"></div>
+      <div class="hour-labels" id="hour-labels"></div>
+      <p class="note" id="hours-note"></p>
+    </div>
+  </section>
+
+  <section class="section" id="platforms-section" hidden>
+    <h2>听歌来源</h2>
+    <div class="card">
+      <ul class="plat-list" id="platforms"></ul>
+      <p class="note">更早的历史迁移记录统一记为「本地文件」。</p>
+    </div>
+  </section>
+
+  <section class="section" id="singers-section" hidden>
+    <h2>常听歌手</h2>
+    <div class="card">
+      <div class="pills" id="singers"></div>
+      <p class="note">统计自播放时记录的歌手信息。</p>
+    </div>
+  </section>
+
+  <section class="section" id="artists-section" hidden>
+    <h2>常听声音</h2>
+    <div class="card">
+      <div class="pills" id="artists"></div>
+      <p class="note">依据歌名中的标签与后缀启发式识别，仅供参考。</p>
+    </div>
+  </section>
+
+  <section class="section" id="hl-section" hidden>
+    <h2>小记</h2>
+    <div class="card"><ul class="highlights" id="highlights"></ul></div>
+  </section>
+
+  <footer class="foot" id="foot" hidden></footer>
+  <div class="state" id="state">正在生成报告…</div>
+</main>
+
+<script>
+  "use strict";
+  const $ = (id) => document.getElementById(id);
+  const esc = (s) => String(s).replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+  const fmtInt = (n) => Number(n).toLocaleString("zh-CN");
+
+  function fmtDur(sec) {
+    sec = Math.max(0, Math.round(sec));
+    const h = Math.floor(sec / 3600), m = Math.floor((sec % 3600) / 60);
+    if (h) return `${h} 小时 ${m} 分钟`;
+    if (m) return `${m} 分钟`;
+    return `${sec} 秒`;
+  }
+  function fmtShort(sec) {
+    if (sec >= 3600) return (sec / 3600).toFixed(1) + "h";
+    if (sec >= 60) return Math.round(sec / 60) + "min";
+    return Math.round(sec) + "s";
+  }
+  function cnDate(s) {
+    if (!s) return "";
+    const [, m, d] = s.split("-");
+    return `${+m} 月 ${+d} 日`;
+  }
+
+  /* ---- 头部与概览 ---- */
+  function renderHero(data) {
+    const { start, end, span_days, active_days } = data.range;
+    $("hero-range").textContent = start === end ? start : `${start} — ${end}`;
+    const dur = `<b>${fmtDur(data.totals.seconds)}</b>`;
+    if (start === end) {
+      $("hero-line").innerHTML = `在 ${cnDate(start)} 这一天，音乐陪伴了你 ${dur}`;
+    } else {
+      $("hero-line").innerHTML =
+        `从 ${cnDate(start)} 到 ${cnDate(end)} 的 ${span_days} 天里，` +
+        `有 ${active_days} 天与你共享音符，共 ${dur}`;
+    }
+  }
+
+  function renderCards(data) {
+    const t = data.totals, streak = data.highlights.max_streak;
+    const uniqueRatio = t.plays ? Math.round(t.unique_songs / t.plays * 100) : 0;
+    const items = [
+      { num: (t.seconds / 3600).toFixed(1), unit: "小时", lab: "累计收听", sub: fmtDur(t.seconds) },
+      { num: fmtInt(t.plays), unit: "次", lab: "播放歌曲", sub: "每一次按下播放" },
+      { num: fmtInt(t.unique_songs), unit: "首", lab: "听过曲目", sub: `占播放的 ${uniqueRatio}%` },
+      { num: fmtInt(data.range.active_days), unit: "天", lab: "活跃天数",
+        sub: streak && streak.days > 1 ? `最长连续 ${streak.days} 天` : "细水长流" },
+    ];
+    $("cards").innerHTML = items.map((it) => `
+      <div class="card stat">
+        <div class="num">${it.num}<small>${it.unit}</small></div>
+        <div class="lab">${it.lab}</div>
+        <div class="sub">${it.sub}</div>
+      </div>`).join("");
+  }
+
+  /* ---- 每日趋势（SVG） ---- */
+  function renderDaily(daily) {
+    const wrap = $("daily-chart");
+    const W = Math.max(320, wrap.clientWidth - 12), H = 232, padT = 18, padB = 30, padX = 6;
+    const n = daily.length;
+    const max = Math.max(...daily.map((d) => d.seconds), 60);
+    const step = (W - padX * 2) / n;
+    const bw = Math.min(46, Math.max(6, step * 0.6));
+    const base = H - padB;
+    const labelEvery = Math.max(1, Math.ceil(n / 12));
+
+    let s = `<svg width="${W}" height="${H}" viewBox="0 0 ${W} ${H}">`;
+    s += `<defs><linearGradient id="gradBar" x1="0" y1="0" x2="0" y2="1">
+            <stop offset="0" stop-color="#9db8a6"/><stop offset="1" stop-color="#5e8098"/>
+          </linearGradient></defs>`;
+    s += `<line x1="${padX}" y1="${base + .5}" x2="${W - padX}" y2="${base + .5}" stroke="#e6e1d3"/>`;
+
+    daily.forEach((d, i) => {
+      const h = Math.max(3, d.seconds / max * (H - padT - padB));
+      const x = padX + step * i + (step - bw) / 2;
+      const y = base - h;
+      s += `<rect class="dbar" data-i="${i}" x="${x.toFixed(1)}" y="${y.toFixed(1)}"
+              width="${bw.toFixed(1)}" height="${h.toFixed(1)}" rx="${Math.min(4, bw / 3).toFixed(1)}"/>`;
+      if (i % labelEvery === 0 || i === n - 1) {
+        s += `<text class="xlabel" x="${(x + bw / 2).toFixed(1)}" y="${H - 10}">${d.date.slice(5)}</text>`;
+      }
+    });
+    s += "</svg>";
+    wrap.innerHTML = s;
+
+    const tip = $("chart-tip");
+    wrap.querySelectorAll(".dbar").forEach((rect) => {
+      rect.addEventListener("mouseenter", () => {
+        const d = daily[+rect.dataset.i];
+        tip.innerHTML = `<b>${d.date}</b><br>${fmtDur(d.seconds)} · ${d.plays} 首`;
+        tip.hidden = false;
+        const rb = rect.getBoundingClientRect(), wb = wrap.getBoundingClientRect();
+        tip.style.left = (rb.left + rb.width / 2 - wb.left) + "px";
+        tip.style.top = (rb.top - wb.top) + "px";
+      });
+      rect.addEventListener("mouseleave", () => { tip.hidden = true; });
+    });
+  }
+
+  /* ---- Top 榜单 ---- */
+  const shortDate = (s) => (s ? s.slice(5).replace("-", "/") : "—");
+  function renderTop(list) {
+    const max = list.length ? list[0].count : 1;
+    $("top-songs").innerHTML = list.map((t, i) => `
+      <li class="song-row">
+        <div class="rank ${i < 3 ? "top" : ""}">${i + 1}</div>
+        <div class="song-main">
+          <div class="song-title" title="${esc(t.title)}">${esc(t.title)}</div>
+          <div class="song-bar"><i style="width:${(t.count / max * 100).toFixed(1)}%"></i></div>
+          <div class="song-sub">首听 ${shortDate(t.first)} · 最近 ${shortDate(t.last)}</div>
+        </div>
+        <div class="song-count">${t.count} 次</div>
+      </li>`).join("");
+  }
+
+  /* ---- 一周节奏 ---- */
+  function renderWeek(week) {
+    const max = Math.max(...week.map((w) => w.seconds), 1);
+    $("week").innerHTML = week.map((w, i) => `
+      <div class="wcol ${i >= 5 ? "weekend" : ""}">
+        <div class="wval">${w.seconds > 0 ? fmtShort(w.seconds) : "—"}</div>
+        <div class="wzone"><div class="wbar" style="height:${Math.max(4, w.seconds / max * 100).toFixed(1)}%"></div></div>
+        <div class="wlabel">${w.label}</div>
+      </div>`).join("");
+  }
+
+  /* ---- 听歌时段 ---- */
+  function renderHours(hourly) {
+    const section = $("hours-section");
+    if (!hourly || !hourly.known) { section.hidden = true; return; }
+    section.hidden = false;
+    const plays = hourly.plays;
+    const max = Math.max(...plays.map((p) => p.plays), 1);
+    const peak = plays.reduce((a, b) => (b.plays > a.plays ? b : a), plays[0]);
+    const labeled = new Set([0, 6, 12, 18, 23]);
+    $("hours").innerHTML = plays.map((p) =>
+      `<div class="hzone"><div class="hbar ${p.hour === peak.hour ? "peak" : ""}"
+        style="height:${Math.max(3, p.plays / max * 100).toFixed(1)}%"></div></div>`).join("");
+    $("hour-labels").innerHTML = plays.map((p) =>
+      `<div class="hl">${labeled.has(p.hour) ? p.hour + "点" : ""}</div>`).join("");
+    $("hours-note").textContent =
+      `共 ${fmtInt(hourly.known)} 条记录带有时间信息，${peak.hour} 点是你最常按下播放的时刻。`;
+  }
+
+  /* ---- 来源分布 ---- */
+  function renderPlatforms(platforms) {
+    const section = $("platforms-section");
+    const visible = (platforms || []).filter((p) => p.plays > 0);
+    if (!visible.length || (visible.length === 1 && visible[0].key === "unknown")) {
+      section.hidden = true; return;
+    }
+    section.hidden = false;
+    const max = Math.max(...visible.map((p) => p.plays), 1);
+    $("platforms").innerHTML = visible.map((p) => `
+      <li class="plat-row">
+        <div class="plat-name">${esc(p.label)}</div>
+        <div class="plat-bar"><i style="width:${(p.plays / max * 100).toFixed(1)}%"></i></div>
+        <div class="plat-count">${fmtInt(p.plays)} 次</div>
+      </li>`).join("");
+  }
+
+  /* ---- 声源与小记 ---- */
+  function renderPills(list, sectionId, wrapId) {
+    const section = $(sectionId);
+    if (!list || !list.length) { section.hidden = true; return; }
+    section.hidden = false;
+    $(wrapId).innerHTML = list.map((a) =>
+      `<span class="pill">${esc(a.name)}<b>×${a.count}</b></span>`).join("");
+  }
+
+  function renderHighlights(data) {
+    const hl = data.highlights, items = [];
+    if (hl.busiest_day) {
+      items.push(`${cnDate(hl.busiest_day.date)} 是你听得最投入的一天，共 ${fmtDur(hl.busiest_day.seconds)}。`);
+    }
+    if (hl.top_song) {
+      items.push(`《${hl.top_song.title}》一共听了 ${hl.top_song.count} 次，是你最熟悉的旋律。`);
+    }
+    if (hl.max_streak && hl.max_streak.days > 1) {
+      const s = hl.max_streak;
+      items.push(`最长的一次，你从 ${cnDate(s.start)} 到 ${cnDate(s.end)} 连续 ${s.days} 天都有听歌。`);
+    }
+    if (data.totals.avg_per_active_day > 0) {
+      items.push(`平均每个有音乐的日子，你们相伴 ${fmtDur(data.totals.avg_per_active_day)}。`);
+    }
+    if (hl.peak_hour) {
+      items.push(`一天之中，${hl.peak_hour.hour} 点是你最常与音乐相遇的时刻。`);
+    }
+    if (hl.top_platform) {
+      items.push(`来自「${hl.top_platform.label}」的播放最多，共 ${fmtInt(hl.top_platform.plays)} 次。`);
+    }
+    const section = $("hl-section");
+    if (!items.length) { section.hidden = true; return; }
+    section.hidden = false;
+    $("highlights").innerHTML = items.map((t) => `<li>${esc(t)}</li>`).join("");
+  }
+
+  /* ---- 总控 ---- */
+  let DATA = null;
+
+  function renderAll(data) {
+    $("state").hidden = true;
+    $("foot").hidden = false;
+    $("foot").textContent = `数据来源 ${data.source} · 生成于 ${data.generated_at} · 本地生成，未上传任何数据`;
+    renderHero(data);
+    renderCards(data);
+    renderDaily(data.daily);
+    renderTop(data.top_songs);
+    renderWeek(data.weekday);
+    renderHours(data.hourly);
+    renderPlatforms(data.platforms);
+    renderPills(data.singers, "singers-section", "singers");
+    renderPills(data.artists, "artists-section", "artists");
+    renderHighlights(data);
+  }
+
+  function showState(msg) {
+    $("state").textContent = msg;
+    $("state").hidden = false;
+    $("foot").hidden = true;
+  }
+
+  async function load() {
+    try {
+      const res = await fetch("/api/report");
+      const data = await res.json();
+      if (!data.ok) { showState("⚠ " + (data.error || "数据读取失败")); return; }
+      if (!data.totals || !data.totals.plays) {
+        showState("stats.json 里还没有听歌记录，先去听几首歌吧 ♪");
+        return;
+      }
+      DATA = data;
+      renderAll(data);
+    } catch (err) {
+      showState("无法连接报告服务器，请确认 server.py 正在运行");
+    }
+  }
+
+  let resizeTimer;
+  window.addEventListener("resize", () => {
+    clearTimeout(resizeTimer);
+    resizeTimer = setTimeout(() => { if (DATA) renderDaily(DATA.daily); }, 160);
+  });
+
+  load();
+</script>
+</body>
+</html>

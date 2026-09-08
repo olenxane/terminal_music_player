@@ -79,6 +79,7 @@ class Player:
         self._stream: Optional[sd.OutputStream] = None
         self._lock = threading.Lock()
         self._frames_played = 0
+        self._frames_listened = 0
         self._samplerate = 44100
         self._channels = 2
         self._duration_frames = 0
@@ -90,12 +91,19 @@ class Player:
         self.loudness_gain_db = 0.0
         self._loudness_generation = 0
         self._loudness_task: Optional[threading.Thread] = None
+        self._loudness_cancel: Optional[threading.Event] = None
 
     # ---------- 属性 ----------
     @property
     def position_sec(self) -> float:
         with self._lock:
             return self._frames_played / self._samplerate if self._samplerate else 0.0
+
+    @property
+    def listened_sec(self) -> float:
+        """实际已听秒数：仅正常播放时递增，不含 seek 跳变（统计30秒判定用）"""
+        with self._lock:
+            return self._frames_listened / self._samplerate if self._samplerate else 0.0
 
     @property
     def duration_sec(self) -> float:
@@ -107,13 +115,14 @@ class Player:
         return self._path
 
     # ---------- 加载/控制 ----------
-    def load(self, path: str, eq_bands=None, q_values=None):
+    def load(self, path: str, eq_bands=None, q_values=None, headers=None):
         self.stop()
-        self._file = FFmpegAudioFile(path)
+        self._file = FFmpegAudioFile(path, headers=headers)
         self._samplerate = self._file.samplerate
         self._channels = self._file.channels
         self._duration_frames = len(self._file)
         self._frames_played = 0
+        self._frames_listened = 0
         self._path = path
         self._eof_notified = False
         self.equalizer = Equalizer(fs=self._samplerate,
@@ -126,7 +135,7 @@ class Player:
         self._init_dsp_modules()
 
         # 后台启动响度分析（不阻塞播放）
-        self._start_loudness_analysis(path)
+        self._start_loudness_analysis(path, headers=headers)
 
     def _init_dsp_modules(self):
         """按配置初始化 VBE / Limiter（模块缺失或关闭则跳过）"""
@@ -150,25 +159,34 @@ class Player:
             except Exception:
                 self.limiter = None
 
-    def _start_loudness_analysis(self, path: str):
+    def _start_loudness_analysis(self, path: str, headers=None):
         """后台线程分析整曲响度，generation 防止旧结果覆盖新歌"""
         if not (self.loudness_enabled and _HAS_LOUDNESS):
             return
         self.loudness_gain_db = 0.0
         self._loudness_generation += 1
+        # 取消仍在运行的旧分析，避免快速切歌时堆积分析线程与 ffmpeg 进程
+        if self._loudness_cancel is not None:
+            self._loudness_cancel.set()
+        cancel = threading.Event()
+        self._loudness_cancel = cancel
         gen = self._loudness_generation
         self._loudness_task = threading.Thread(
             target=self._analyze_loudness,
-            args=(path, self._samplerate, self._channels, gen),
+            args=(path, self._samplerate, self._channels, gen, cancel),
+            kwargs={"headers": headers},
             daemon=True,
         )
         self._loudness_task.start()
 
-    def _analyze_loudness(self, path: str, fs: int, channels: int, gen: int):
+    def _analyze_loudness(self, path: str, fs: int, channels: int, gen: int,
+                          cancel_event=None, headers=None):
         """分析完成后仅在 generation 匹配时应用增益"""
         try:
             analyzer = LoudnessAnalyzer(target_lufs=self.loudness_target_lufs)
-            _lufs, gain_db = analyzer.measure(path, fs, channels)
+            _lufs, gain_db = analyzer.measure(path, fs, channels,
+                                              headers=headers,
+                                              cancel_event=cancel_event)
             if gen == self._loudness_generation:
                 self.loudness_gain_db = gain_db
         except Exception:
@@ -233,6 +251,7 @@ class Player:
             outdata[:] = data
             with self._lock:
                 self._frames_played += n_read
+                self._frames_listened += n_read
             mono = data.mean(axis=1) if data.ndim > 1 else data
             self.spectrum.feed(mono.astype(np.float32))
             if n_read < frames:
@@ -281,6 +300,13 @@ class Player:
             except Exception:
                 pass
             self._file = None
+        # 复位进度，避免加载失败后残留上一首的 position 被统计误读
+        self._frames_played = 0
+        self._frames_listened = 0
+        self._seek_target = None
+        # 取消仍在后台运行的响度分析（切歌/退出时不残留 ffmpeg 子进程）
+        if self._loudness_cancel is not None:
+            self._loudness_cancel.set()
 
     def seek(self, seconds: float):
         if self._file is None:

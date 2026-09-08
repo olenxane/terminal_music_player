@@ -210,7 +210,7 @@ def _render_title_line(track, player, playlist, theme, width: int,
     suffix = f" {_fmt_time(pos)}/{_fmt_time(dur)} [{mode_label}]"
     if playlist.queue_len() > 0:
         suffix += f" [队列:{playlist.queue_len()}]"
-    suffix += f" 🔊{vol_pct}%"
+    suffix += f" 🔊 {vol_pct}%"
 
     icon_w = cell_len(icon_part)
     suffix_w = cell_len(suffix)
