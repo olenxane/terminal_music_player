@@ -45,6 +45,16 @@ class LyricsData:
         return ans
 
 
+def format_lrc_time(time_ms: float) -> str:
+    """毫秒 → LRC 时间戳 [mm:ss.xx]（歌词文件导出用）"""
+    if time_ms < 0:
+        time_ms = 0
+    total_cs = int(round(time_ms / 10.0))  # 厘秒
+    cs = total_cs % 100
+    m, s = divmod(total_cs // 100, 60)
+    return f"{m:02d}:{s:02d}.{cs:02d}"
+
+
 def _parse_lrc_text(text: str) -> list:
     lines = []
     for raw_line in text.splitlines():

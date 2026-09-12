@@ -150,7 +150,8 @@ def _song_display_name(track) -> str:
 
 def build_online_search_ui(cfg, platform: str, search_str: str,
                              tracks: list, selector_index: int,
-                             width: int = 50, playlist=None) -> Group:
+                             width: int = 50, playlist=None,
+                             view_start: int | None = None) -> Group:
     theme = cfg.theme
     name = platform_display_name(platform)
     lines = [_header(f"{name}搜索", theme)]
@@ -163,7 +164,7 @@ def build_online_search_ui(cfg, platform: str, search_str: str,
     in_q = playlist.is_online_in_queue if playlist else None
     lines.extend(_render_list(tracks, selector_index, theme, width,
                               get_name=_song_display_name, in_queue_fn=in_q,
-                              gradient_items=True))
+                              gradient_items=True, view_start=view_start))
     lines.append(_footer("Enter: 立即播放  →: 加入队列  ←: 收藏  Esc: 返回", theme))
     return Group(*lines)
 
@@ -171,6 +172,8 @@ def build_online_search_ui(cfg, platform: str, search_str: str,
 def build_online_user_search_ui(cfg, search_str: str, users: list,
                                 selector_index: int, width: int = 50) -> Group:
     """B站UP主搜索界面：搜索栏 + 用户列表（Enter 查看该UP主视频）"""
+    # 防御：仅保留 dict 条目（UP主对象），防止共享列表残留的 OnlineTrack 等被当用户渲染
+    users = [u for u in users if isinstance(u, dict)]
     theme = cfg.theme
     lines = [_header("哔哩哔哩UP主搜索", theme)]
     search_line = Text(no_wrap=True)

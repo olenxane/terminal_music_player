@@ -29,6 +29,22 @@ THEME_FIELDS = [
     ("lyric_current", "当前歌词色"), ("lyric_context", "上下文歌词色"),
 ]
 
+# 按键绑定动作：(配置字段, 界面说明, 默认键)
+KEYBIND_ACTIONS = [
+    ("quit", "退出程序", "q"),
+    ("selector", "歌曲选择器", "tab"),
+    ("online", "在线音乐", "o"),
+    ("play_pause", "播放/暂停", "space"),
+    ("next", "下一首", "n"),
+    ("prev", "上一首（历史回退）", "p"),
+    ("spectrum", "频谱开关", "s"),
+    ("theme", "切换主题", "t"),
+    ("mode", "切换播放模式", "m"),
+    ("reload", "热重载配置", "r"),
+    ("download", "下载当前在线歌曲", "d"),
+    ("dir_setup", "重新配置音频目录", "u"),
+]
+
 
 def _default_cfg_path() -> str:
     return os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.yaml")
@@ -110,6 +126,7 @@ class ConfigGUI:
         self._collect_dsp()
         self._collect_dirs()
         self._collect_online()
+        self._collect_keybindings()
         with open(self.cfg_path, "w", encoding="utf-8") as f:
             yaml.safe_dump(self.raw, f, allow_unicode=True,
                            sort_keys=False, default_flow_style=False)
@@ -126,6 +143,7 @@ class ConfigGUI:
         self._build_dsp_tab(notebook)
         self._build_dirs_tab(notebook)
         self._build_online_tab(notebook)
+        self._build_keybind_tab(notebook)
 
         btn_frame = ttk.Frame(self.root)
         btn_frame.pack(fill="x", padx=8, pady=(0, 8))
@@ -739,10 +757,58 @@ class ConfigGUI:
         ttk.Label(frame, text="登录请在播放器中按 o 进入在线模式，选择平台后扫码登录。",
                   foreground="#888").pack(anchor="w", padx=8, pady=2)
 
+        dl = ttk.LabelFrame(frame, text="下载设置")
+        dl.pack(fill="x", padx=8, pady=8)
+        ttk.Label(dl, text="下载目录:").grid(row=0, column=0, sticky="w", padx=4, pady=2)
+        self._om_download_dir = tk.StringVar(value=om.get("download_dir", ""))
+        ttk.Entry(dl, textvariable=self._om_download_dir, width=44).grid(
+            row=0, column=1, sticky="we", padx=4)
+        ttk.Button(dl, text="浏览…", command=self._browse_download_dir).grid(
+            row=0, column=2, padx=4)
+        ttk.Label(dl, text="播放在线歌曲时按 d 下载到该目录，同时保存歌词并写入标签封面；"
+                  "默认 download_musics 子目录（相对路径以程序目录为基准）。",
+                  foreground="#888").grid(row=1, column=0, columnspan=3,
+                                          sticky="w", padx=4, pady=2)
+
+    def _browse_download_dir(self):
+        path = filedialog.askdirectory(title="选择在线歌曲下载目录")
+        if path:
+            self._om_download_dir.set(path)
+
     def _collect_online(self):
         om = self.raw.setdefault("online_music", {})
         om["qq_quality"] = int(self._om_qq_quality.get())
         om["wy_quality"] = self._om_wy_quality.get()
+        om["download_dir"] = self._om_download_dir.get().strip()
+
+    # --- 按键绑定 Tab ---
+    def _build_keybind_tab(self, notebook: ttk.Notebook):
+        frame = ttk.Frame(notebook)
+        notebook.add(frame, text="按键绑定")
+        self._keybind_vars = {}
+
+        kb_raw = self.raw.get("keybindings", {}) or {}
+        for row, (field, label, default) in enumerate(KEYBIND_ACTIONS):
+            ttk.Label(frame, text=label).grid(row=row, column=0, sticky="w",
+                                              padx=8, pady=3)
+            var = tk.StringVar(value=kb_raw.get(field, default))
+            ent = ttk.Entry(frame, textvariable=var, width=10, justify="center")
+            ent.grid(row=row, column=1, padx=4, pady=3)
+            self._keybind_vars[field] = var
+            ttk.Label(frame, text=f"默认: {default}", foreground="#888").grid(
+                row=row, column=2, sticky="w")
+
+        ttk.Label(frame, text="输入单个字符；空格请输入 space，Tab 请输入 tab（不区分大小写）。"
+                  "\n方向键（音量/快进快退）与选择器/在线模式内部按键不支持自定义。"
+                  "\n方向键（音量/快进快退）与选择器/在线模式内部按键不支持自定义。",
+                  foreground="#888").grid(row=len(KEYBIND_ACTIONS), column=0,
+                                          columnspan=3, sticky="w", padx=8, pady=8)
+
+    def _collect_keybindings(self):
+        kb = self.raw.setdefault("keybindings", {})
+        for field, _, default in KEYBIND_ACTIONS:
+            v = self._keybind_vars[field].get().strip().lower()
+            kb[field] = v if v else default
 
     # ---------- 关闭 ----------
     def _on_close(self):

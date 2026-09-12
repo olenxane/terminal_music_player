@@ -8,7 +8,8 @@ import threading
 from dataclasses import dataclass, field
 from typing import Optional
 
-from .lyrics import LyricsData, LyricLine, lyrics_from_lines, _parse_lrc_text
+from .lyrics import (LyricsData, LyricLine, lyrics_from_lines, _parse_lrc_text,
+                     format_lrc_time)
 
 # ---- sys.path 设置 ----
 _PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -81,6 +82,7 @@ class OnlineTrack:
     is_vip: bool = False
     liked: bool = False      # 是否已收藏（仅 QQ 平台有效）
     lyric_data: Optional[LyricsData] = None
+    cover_url: Optional[str] = None         # 封面图 URL（下载时嵌入标签用）
     stream_headers: Optional[dict] = None   # 直链所需 HTTP 请求头（B站需 Referer）
     stream_urls_backup: Optional[list] = None  # 备用直链线路（B站多 CDN）
 
@@ -209,6 +211,8 @@ class OnlineMusicManager:
 
     # ---------- QQ音乐功能 ----------
     def _qq_song_to_track(self, song) -> OnlineTrack:
+        cover = (f"https://y.qq.com/music/photo_new/T002R300x300M000{song.album_mid}.jpg"
+                 if getattr(song, "album_mid", "") else None)
         return OnlineTrack(
             title=song.name,
             artist=song.singer,
@@ -217,6 +221,7 @@ class OnlineMusicManager:
             platform="qq",
             song_id=song.mid,
             is_vip=song.is_vip,
+            cover_url=cover,
         )
 
     def qq_get_recommend_playlists(self) -> list:
@@ -429,7 +434,9 @@ class OnlineMusicManager:
         api = self._ensure_wy()
         try:
             result = api.get_lyrics(int(song_id))
-            lrc_text = result.get("lyric", "")
+            lyric = result.get("lyric") if result else None
+            # get_lyrics 返回的是 LRC 行列表，需 join 成文本再解析
+            lrc_text = "\n".join(lyric) if isinstance(lyric, list) else (lyric or "")
             if not lrc_text:
                 return None
             lines = _parse_lrc_text(lrc_text)
@@ -455,6 +462,7 @@ class OnlineMusicManager:
             duration_sec=_parse_bili_duration(item.get("duration", 0)),
             platform="bili",
             song_id=str(item.get("bvid", "")),
+            cover_url=item.get("pic") or item.get("cover") or None,
             stream_headers=dict(bili_client.STREAM_HEADERS),
         )
 
@@ -464,16 +472,24 @@ class OnlineMusicManager:
         videos = [r for r in results if r.get("bvid")][:num]
         return [self._bili_video_to_track(v) for v in videos]
 
+    def bili_search_page(self, keyword: str, page: int = 1, num: int = 20) -> dict:
+        """B站视频搜索（分页，供搜索结果动态增长）。
+
+        返回 {"items": [OnlineTrack], "page": 页码, "has_more": 是否还有下一页}
+        （B站搜索接口每页约 20 条，返回条数不足时视为末页）
+        """
+        self._ensure_bili()
+        results = self._async.run(bili_client.search_video(keyword, page=page))
+        videos = [r for r in results if r.get("bvid")]
+        return {
+            "items": [self._bili_video_to_track(v) for v in videos[:num]],
+            "page": page,
+            "has_more": len(videos) >= num and page < 50,
+        }
+
     def _bili_get_lyrics(self, bvid: str) -> Optional[LyricsData]:
         """B站字幕 → LRC → LyricsData（无字幕/无凭证返回 None）"""
-        self._ensure_bili()
-        try:
-            _, items = self._async.run(bili_client.get_video_subtitle(bvid))
-        except Exception as e:
-            from .logging_utils import log_warning
-            log_warning(f"获取B站字幕失败: {bvid} - {e}")
-            return None
-        lrc_text = bili_lyrics.subtitle_to_lrc(items)
+        lrc_text = self._bili_get_lrc_text(bvid)
         if not lrc_text:
             return None
         lines = _parse_lrc_text(lrc_text)
@@ -481,6 +497,65 @@ class OnlineMusicManager:
             return None
         return LyricsData(lines=lines, source_path=None,
                           match_type="online", similarity=1.0)
+
+    def _bili_get_lrc_text(self, bvid: str) -> str:
+        """B站字幕 → LRC 文本（下载歌词/嵌入标签共用），无字幕返回空"""
+        self._ensure_bili()
+        try:
+            _, items = self._async.run(bili_client.get_video_subtitle(bvid))
+        except Exception as e:
+            from .logging_utils import log_warning
+            log_warning(f"获取B站字幕失败: {bvid} - {e}")
+            return ""
+        try:
+            return bili_lyrics.subtitle_to_lrc(items) or ""
+        except Exception:
+            return ""
+
+    # ---------- 下载辅助（封面/原始歌词） ----------
+    def get_cover_url(self, track: OnlineTrack) -> str:
+        """获取歌曲封面图 URL（qq/bili 列表自带，wy 运行时查询专辑信息）"""
+        if track.cover_url:
+            return track.cover_url
+        if track.platform == "wy":
+            try:
+                api = self._ensure_wy()
+                info = api.get_song_info(int(track.song_id)) or {}
+                url = (info.get("al") or {}).get("picUrl") or ""
+                if url:
+                    track.cover_url = url
+                return url
+            except Exception as e:
+                from .logging_utils import log_warning
+                log_warning(f"获取网易云封面失败: {track.title} - {e}")
+        return ""
+
+    def get_raw_lrc(self, track: OnlineTrack) -> str:
+        """获取原始 LRC 歌词文本（含翻译行），失败返回空"""
+        try:
+            if track.platform == "qq":
+                client = self._ensure_qq()
+                lyric = self._async.run(client.get_lyric(track.song_id))
+                if not lyric or not lyric.lines:
+                    return ""
+                rows = []
+                for ln in lyric.lines:
+                    ts = format_lrc_time(ln.time_ms)
+                    rows.append(f"[{ts}]{ln.text}")
+                    if ln.translation:
+                        rows.append(f"[{ts}]{ln.translation}")
+                return "\n".join(rows)
+            if track.platform == "wy":
+                api = self._ensure_wy()
+                result = api.get_lyrics(int(track.song_id)) or {}
+                lyric = result.get("lyric") or []
+                return "\n".join(lyric) if isinstance(lyric, list) else str(lyric)
+            if track.platform == "bili":
+                return self._bili_get_lrc_text(track.song_id)
+        except Exception as e:
+            from .logging_utils import log_warning
+            log_warning(f"获取歌词失败: [{track.platform}] {track.title} - {e}")
+        return ""
 
     def bili_search_users(self, keyword: str, num: int = 20) -> list:
         """搜索UP主，返回 [{"mid","uname","fans","videos","usign"}]"""

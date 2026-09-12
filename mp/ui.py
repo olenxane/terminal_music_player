@@ -263,8 +263,9 @@ def _render_lyrics_line(lyrics_data, position_ms: int, theme, width: int) -> Tex
 
 
 def build_compact_ui(cfg, track, player, spectrum_levels, lyrics_data,
-                     playlist, spectrum_on: bool, width: int = 50) -> Group:
-    """构建紧凑界面（开频谱 ≤7行，关频谱 ≤3行）"""
+                     playlist, spectrum_on: bool, width: int = 50,
+                     status: str = "") -> Group:
+    """构建紧凑界面（开频谱 ≤7行，关频谱 ≤3行）；status 为临时状态行（如下载结果）"""
     theme = cfg.theme
     pos_ms = int(player.position_sec * 1000) + cfg.lyrics.offset_ms
     title = _render_title_line(track, player, playlist, theme, width,
@@ -272,14 +273,21 @@ def build_compact_ui(cfg, track, player, spectrum_levels, lyrics_data,
     progress = _render_progress_bar(track, player, theme, width)
     lyrics = _render_lyrics_line(lyrics_data, pos_ms, theme, width)
 
+    rows = [title, progress, lyrics]
+
     if not spectrum_on or cfg.spectrum.height < 1:
-        return Group(title, progress, lyrics)
+        if status:
+            rows.append(Text(_fit_text(status, width), style=theme.dim))
+        return Group(*rows)
 
     spec_text = render_spectrum(spectrum_levels, theme,
                                 height=cfg.spectrum.height, width=width,
                                 scale=cfg.spectrum.height_scale,
                                 placeholder=cfg.spectrum.zhanwei_char)
-    return Group(title, progress, lyrics, Text(""), spec_text)
+    out_rows = list(rows) + [Text(""), spec_text]
+    if status:
+        out_rows.append(Text(_fit_text(status, width), style=theme.dim))
+    return Group(*out_rows)
 
 
 def build_song_selector_ui(cfg, playlist, search_str: str,

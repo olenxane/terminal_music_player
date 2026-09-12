@@ -2,6 +2,7 @@
 from __future__ import annotations
 import argparse
 import os
+import random
 import sys
 import time
 
@@ -20,7 +21,9 @@ from .keyinput import KeyReader
 from .setup_wizard import ensure_music_dirs
 from .stats import StatsTracker
 from .online_music import OnlineMusicManager, OnlineTrack
+from .metadata import write_track_tags
 from .logging_utils import log_error, log_warning, log_exception
+from .lyrics import format_lrc_time
 
 MODE_CYCLE = ["sequential", "shuffle", "repeat_one", "repeat_all"]
 
@@ -125,6 +128,7 @@ class App:
         self._search_str = ""
         self._selector_index = 0
         self._filtered_indices = list(range(len(self.playlist.tracks))) if self.playlist.tracks else []
+        self._selector_shuffle_order = None  # shuffle 模式下选择器的随机显示顺序（index → 位置）
         self._selector_search_pending = False
         self._selector_search_reset = False
         self._selector_last_input = 0.0
@@ -171,6 +175,11 @@ class App:
         self._bili_load_result = None
         self._bili_list_kind = "hot"  # VIEW_BILI_RECOMMEND 当前数据源: hot / rcmd
         self._bili_list_offset = 0    # 推荐列表粘性视口的窗口首行索引
+        # B站视频搜索分页（结果滑到底自动叠加下一页）
+        self._bili_search_page = 1
+        self._bili_search_has_more = False
+        self._bili_search_loading = False
+        self._bili_search_keyword = ""
 
         if self.playlist.tracks:
             self._load_current_track()
@@ -484,8 +493,15 @@ class App:
         if self._selector_active:
             self._search_str = ""
             self._selector_index = 0
-            self._filtered_indices = list(range(len(self.playlist.tracks)))
             self._selector_search_pending = False
+            # 随机播放模式下选择器按随机顺序显示（打开时固定一次，避免输入时跳动）
+            if self.playlist.mode == "shuffle":
+                order = list(range(len(self.playlist.tracks)))
+                random.shuffle(order)
+                self._selector_shuffle_order = {idx: pos for pos, idx in enumerate(order)}
+            else:
+                self._selector_shuffle_order = None
+            self._update_filtered_indices()
 
     def _update_filtered_indices(self):
         """按搜索串过滤歌曲：关键词按空格拆分，每个需作为子串出现（顺序无关）"""
@@ -495,6 +511,9 @@ class App:
             if all(kw in os.path.basename(self.playlist.tracks[i]).lower()
                    for kw in keywords)
         ]
+        if self._selector_shuffle_order:
+            order = self._selector_shuffle_order
+            self._filtered_indices.sort(key=lambda i: order.get(i, len(order)))
         if self._filtered_indices:
             self._selector_index = min(self._selector_index,
                                        len(self._filtered_indices) - 1)
@@ -526,8 +545,6 @@ class App:
             if self._filtered_indices and self._selector_index < len(self._filtered_indices):
                 orig_idx = self._filtered_indices[self._selector_index]
                 self.playlist.add_to_queue(orig_idx)
-                if self._selector_index < len(self._filtered_indices) - 1:
-                    self._selector_index += 1
         elif key == "\r" or key == "\n":
             if self._selector_search_pending:
                 self._selector_search_pending = False
@@ -578,16 +595,45 @@ class App:
         self._online_search_pending = ""
         self._online_search_running = False
         self._online_search_result = None
+        # B站翻页状态一并清除：VIEW_SONG_LIST 由多平台共用，残留的收藏夹 fid
+        # 会让网易云/QQ 歌曲列表误触发 B站翻页，把 dict 混进 OnlineTrack 列表
+        self._bili_fav_fid = ""
+        self._bili_fav_page = 1
+        self._bili_fav_has_more = False
+        self._bili_fav_loading = False
+        self._bili_home_page = 1
+        self._bili_home_has_more = False
+        self._bili_home_loading = False
 
     def _online_push_view(self, view):
-        self._online_view_stack.append(self._online_view)
+        # 保存当前视图数据，弹出时恢复——各视图共用 _online_tracks/_online_sub_items
+        # 等列表，若不快照，返回上级视图时会拿到子视图的残留数据
+        # （如从 UP主视频列表返回 UP主搜索视图时，_online_tracks 里是 OnlineTrack
+        #   而非用户 dict，渲染时 u.get('uname') 直接崩溃）。
+        self._online_view_stack.append({
+            "view": self._online_view,
+            "tracks": self._online_tracks,
+            "sub_items": self._online_sub_items,
+            "search_str": self._online_search_str,
+            "selector_index": self._online_selector_index,
+            "song_list_title": self._online_song_list_title,
+            "bili_list_offset": self._bili_list_offset,
+            "bili_fav_fid": self._bili_fav_fid,
+        })
         self._online_view = view
         self._online_selector_index = 0
 
     def _online_pop_view(self):
         if self._online_view_stack:
-            self._online_view = self._online_view_stack.pop()
-            self._online_selector_index = 0
+            entry = self._online_view_stack.pop()
+            self._online_view = entry["view"]
+            self._online_tracks = entry["tracks"]
+            self._online_sub_items = entry["sub_items"]
+            self._online_search_str = entry["search_str"]
+            self._online_selector_index = entry["selector_index"]
+            self._online_song_list_title = entry["song_list_title"]
+            self._bili_list_offset = entry["bili_list_offset"]
+            self._bili_fav_fid = entry["bili_fav_fid"]
         else:
             self._exit_online_mode()
 
@@ -603,9 +649,8 @@ class App:
         self.player.play()
 
     def _add_online_to_queue(self, track: OnlineTrack):
+        # 添加到队列后光标保持在当前行，不自动下移
         self.playlist.add_online_to_queue(track)
-        if self._online_selector_index < len(self._online_tracks) - 1:
-            self._online_selector_index += 1
 
     def _online_toggle_like(self, track: OnlineTrack):
         """按 ← 收藏/取消收藏当前歌曲（仅 QQ 平台）"""
@@ -804,6 +849,11 @@ class App:
         self._online_search_running = False
         self._online_search_result = None
         self._online_search_gen = 0
+        self._bili_list_offset = 0
+        self._bili_search_page = 1
+        self._bili_search_has_more = False
+        self._bili_search_loading = False
+        self._bili_search_keyword = ""
 
     def _enter_bili_menu(self, idx):
         """B站菜单分发：搜索视频 / UP主搜索 / 热门 / 首页推荐 / 我的收藏 / 导入Cookie / 登录退出"""
@@ -838,9 +888,10 @@ class App:
             self._enter_bili_login()
 
     def _update_bili_list_offset(self, view):
-        """维护推荐/收藏夹列表的粘性视口：仅在选择器越出视口边缘时滚动窗口，
+        """维护搜索/推荐/收藏夹列表的粘性视口：仅在选择器越出视口边缘时滚动窗口，
         列表尾部追加内容不改变视口 → UI 无跳动。"""
-        if view not in (online_ui.VIEW_BILI_RECOMMEND, online_ui.VIEW_SONG_LIST):
+        if view not in (online_ui.VIEW_BILI_RECOMMEND, online_ui.VIEW_SONG_LIST,
+                        online_ui.VIEW_BILI_SEARCH):
             return
         max_visible = online_ui.LIST_MAX_VISIBLE
         sel = self._online_selector_index
@@ -938,7 +989,7 @@ class App:
         self._online_loading = False
 
     def _maybe_load_more_bili(self, view):
-        """B站首页推荐/收藏夹视频：选择器接近列表底部时自动叠加下一页"""
+        """B站搜索/首页推荐/收藏夹视频：选择器接近列表底部时自动叠加下一页"""
         if self._online_selector_index < len(self._online_tracks) - 3:
             return
         import threading
@@ -949,7 +1000,18 @@ class App:
             threading.Thread(target=self._bili_load_more_worker,
                              args=(self._bili_list_kind, self._bili_home_page + 1),
                              daemon=True).start()
-        elif view == online_ui.VIEW_SONG_LIST and self._bili_fav_fid:
+        elif view == online_ui.VIEW_BILI_SEARCH:
+            if self._bili_search_loading or not self._bili_search_has_more:
+                return
+            self._bili_search_loading = True
+            threading.Thread(target=self._bili_load_more_worker,
+                             args=("search", self._bili_search_page + 1,
+                                   self._bili_search_keyword, self._online_search_gen),
+                             daemon=True).start()
+        elif (view == online_ui.VIEW_SONG_LIST and self._bili_fav_fid
+              and self._online_tracks
+              and getattr(self._online_tracks[0], "platform", "") == "bili"):
+            # 当前列表须确为 B站曲目（VIEW_SONG_LIST 与 QQ/网易歌曲列表共用）
             if self._bili_fav_loading or not self._bili_fav_has_more:
                 return
             self._bili_fav_loading = True
@@ -957,13 +1019,17 @@ class App:
                              args=("fav", self._bili_fav_page + 1),
                              daemon=True).start()
 
-    def _bili_load_more_worker(self, kind: str, page: int):
-        """后台加载B站下一页（热门/首页推荐/收藏夹）"""
+    def _bili_load_more_worker(self, kind: str, page: int,
+                               keyword: str = "", gen: int | None = None):
+        """后台加载B站下一页（搜索/热门/首页推荐/收藏夹）"""
         try:
             if kind == "hot":
                 data = self.online_mgr.bili_get_hot_recommend(page=page)
             elif kind == "rcmd":
                 data = self.online_mgr.bili_get_rcmd(page=page)
+            elif kind == "search":
+                data = self.online_mgr.bili_search_page(keyword, page=page)
+                data["gen"] = gen
             else:
                 data = self.online_mgr.bili_get_favorite_videos(self._bili_fav_fid, page=page)
         except Exception:
@@ -985,11 +1051,23 @@ class App:
             # 仅当仍停留在对应视图时追加，避免串列表
             if self._online_view == online_ui.VIEW_BILI_RECOMMEND:
                 self._online_tracks.extend(items)
+        elif kind == "search":
+            self._bili_search_loading = False
+            # 代际匹配（期间用户没输入新关键词）且仍在搜索视图才追加
+            if (data.get("gen") == self._online_search_gen
+                    and self._online_view == online_ui.VIEW_BILI_SEARCH):
+                self._bili_search_page = page
+                self._bili_search_has_more = has_more
+                self._online_tracks.extend(items)
         else:
             self._bili_fav_page = page
             self._bili_fav_has_more = has_more
             self._bili_fav_loading = False
-            if self._online_view == online_ui.VIEW_SONG_LIST and self._bili_fav_fid:
+            # VIEW_SONG_LIST 由 B站收藏夹与 QQ/网易歌曲列表共用，
+            # 仅当当前列表确实是 B站曲目时才追加，防止跨平台污染
+            if (self._online_view == online_ui.VIEW_SONG_LIST and self._bili_fav_fid
+                    and self._online_tracks
+                    and getattr(self._online_tracks[0], "platform", "") == "bili"):
                 self._online_tracks.extend(items)
 
     def _qq_login_check_worker(self):
@@ -1023,10 +1101,13 @@ class App:
         if key == "UP":
             if self._online_tracks:
                 self._online_selector_index = max(0, self._online_selector_index - 1)
+                self._update_bili_list_offset(view)
         elif key == "DOWN":
             if self._online_tracks:
                 self._online_selector_index = min(len(self._online_tracks) - 1,
                                                   self._online_selector_index + 1)
+                self._maybe_load_more_bili(view)
+                self._update_bili_list_offset(view)
         elif key == "RIGHT" and self._online_tracks and self._online_selector_index < len(self._online_tracks):
             self._add_online_to_queue(self._online_tracks[self._online_selector_index])
         elif key == "LEFT" and self._online_tracks and self._online_selector_index < len(self._online_tracks):
@@ -1059,10 +1140,20 @@ class App:
         try:
             if kind == "bili_user":
                 tracks = self.online_mgr.bili_search_users(keyword)
+                self._bili_search_has_more = False
+            elif platform == "bili":
+                # B站视频搜索走分页接口（结果滑到底自动叠加下一页）
+                data = self.online_mgr.bili_search_page(keyword, page=1)
+                tracks = data.get("items", [])
+                self._bili_search_page = 1
+                self._bili_search_keyword = keyword
+                self._bili_search_has_more = data.get("has_more", False)
             else:
                 tracks = self.online_mgr.search(platform, keyword)
+                self._bili_search_has_more = False
         except Exception:
             tracks = []
+            self._bili_search_has_more = False
         self._online_search_result = (tracks, gen)
         self._online_search_running = False
 
@@ -1095,6 +1186,7 @@ class App:
             self._online_search_result = None
             if gen == self._online_search_gen:
                 self._online_tracks = tracks
+                self._bili_list_offset = 0
 
     def _handle_online_song_list_key(self, key, view=None):
         if not self._online_tracks:
@@ -1207,7 +1299,10 @@ class App:
                                                       self._online_search_str,
                                                       self._online_tracks,
                                                       self._online_selector_index, w,
-                                                      playlist=self.playlist)
+                                                      playlist=self.playlist,
+                                                      view_start=(self._bili_list_offset
+                                                                  if v == online_ui.VIEW_BILI_SEARCH
+                                                                  else None))
         if v == online_ui.VIEW_BILI_USER_SEARCH:
             return online_ui.build_online_user_search_ui(cfg, self._online_search_str,
                                                           self._online_tracks,
@@ -1282,6 +1377,153 @@ class App:
                                                     qr_text, status, w)
         return online_ui.build_online_loading_ui(cfg)
 
+    # ---------------- 在线歌曲下载 ----------------
+    def _set_status(self, msg: str):
+        """主界面状态行（下载进度/结果），显示数秒后自动消失"""
+        self._status_msg = msg
+        self._status_time = time.time()
+
+    def _current_status(self) -> str:
+        msg = getattr(self, "_status_msg", "")
+        if not msg or time.time() - getattr(self, "_status_time", 0.0) > 5.0:
+            return ""
+        return msg
+
+    def _download_current_online(self):
+        """下载当前播放的在线歌曲到配置目录（后台线程，不阻塞 UI）"""
+        track = self._online_current
+        if track is None:
+            return
+        if getattr(self, "_download_running", False):
+            self._set_status("⬇ 已有下载任务进行中，请稍候")
+            return
+        self._download_running = True
+        self._set_status(f"⬇ 开始下载: {track.title}")
+        import threading
+        threading.Thread(target=self._download_worker, args=(track,),
+                         daemon=True).start()
+
+    def _download_worker(self, track: OnlineTrack):
+        try:
+            path, note = self._download_online_track(track)
+            if path:
+                suffix = f"（{note}）" if note else ""
+                self._set_status(f"✓ 已下载: {os.path.basename(path)}{suffix}")
+            else:
+                self._set_status(f"✗ 下载失败: {track.title}")
+        except Exception as e:
+            log_warning(f"在线歌曲下载异常: {type(e).__name__} {str(e)[:120]}")
+            self._set_status(f"✗ 下载失败: {track.title}")
+        finally:
+            self._download_running = False
+
+    def _download_online_track(self, track: OnlineTrack) -> str:
+        """取直链（含备用线路）流式下载到目标目录，写入标签/封面/歌词，返回文件路径，失败返回空"""
+        import re
+        import requests
+        url = self.online_mgr.get_play_url(track)
+        if not url:
+            log_error(f"下载失败（获取URL失败）: {track.title}")
+            return ""
+        candidates = [url] + [u for u in (getattr(track, "stream_urls_backup", None) or []) if u]
+        headers = getattr(track, "stream_headers", None)
+
+        dl_dir = (self.cfg.online_music.download_dir or "").strip()
+        if dl_dir and not os.path.isabs(dl_dir):
+            # 相对路径以程序目录（config.yaml 所在目录）为基准
+            out_dir = os.path.join(os.path.dirname(os.path.abspath(self.cfg.path)), dl_dir)
+        elif dl_dir:
+            out_dir = dl_dir
+        else:
+            out_dir = os.getcwd()
+        try:
+            os.makedirs(out_dir, exist_ok=True)
+        except OSError as e:
+            log_warning(f"创建下载目录失败: {out_dir} - {e}")
+            return ""
+
+        base = re.sub(r'[\\/:*?"<>|\r\n\t]', "_", f"{track.title} - {track.artist}").strip() or track.song_id
+        for cand in candidates:
+            try:
+                resp = requests.get(cand, timeout=30, stream=True, headers=headers)
+                resp.raise_for_status()
+                ct = resp.headers.get("content-type", "")
+                url_low = cand.lower()
+                if "flac" in ct or ".flac" in url_low:
+                    ext = ".flac"
+                elif "m4a" in ct or "mp4" in ct or ".m4a" in url_low or track.platform == "bili":
+                    ext = ".m4a"
+                else:
+                    ext = ".mp3"
+                out_path = os.path.join(out_dir, base + ext)
+                n = 1
+                while os.path.exists(out_path):
+                    out_path = os.path.join(out_dir, f"{base} ({n}){ext}")
+                    n += 1
+                tmp_path = out_path + ".part"
+                with open(tmp_path, "wb") as f:
+                    for chunk in resp.iter_content(65536):
+                        f.write(chunk)
+                os.replace(tmp_path, out_path)
+                note = self._post_process_download(track, out_path)
+                return out_path, note
+            except Exception as e:
+                log_warning(f"下载线路失败: {type(e).__name__} {str(e)[:120]}")
+                continue
+        return "", ""
+
+    def _post_process_download(self, track: OnlineTrack, path: str) -> str:
+        """下载完成后补充元数据：保存 .lrc 歌词、拉取封面、写入标签。
+
+        返回结果说明（如 "歌词+封面" / "无字幕歌词" / "无封面"），供状态行展示。
+        """
+        parts = []
+        # 歌词：原始 LRC 优先，兜底由缓存的 LyricsData 重建
+        lrc_text = self.online_mgr.get_raw_lrc(track)
+        if not lrc_text and track.lyric_data and track.lyric_data.lines:
+            lrc_text = "\n".join(f"[{format_lrc_time(l.time_ms)}]{l.text}"
+                                 for l in track.lyric_data.lines)
+        if lrc_text:
+            try:
+                with open(os.path.splitext(path)[0] + ".lrc", "w",
+                          encoding="utf-8") as f:
+                    f.write(lrc_text + "\n")
+                parts.append("歌词")
+            except OSError as e:
+                log_warning(f"歌词文件写入失败: {e}")
+        else:
+            # B站歌词只能来自视频字幕，明确提示原因，避免误以为是下载失败
+            why = "B站视频无字幕或未登录B站" if track.platform == "bili" else "未获取到歌词"
+            log_warning(f"{why}: [{track.platform}] {track.title}")
+            parts.append("无字幕歌词" if track.platform == "bili" else "无歌词")
+
+        # 封面
+        cover_bytes = None
+        cover_url = self.online_mgr.get_cover_url(track)
+        if cover_url:
+            try:
+                import requests
+                r = requests.get(cover_url, timeout=15,
+                                 headers={"User-Agent": "Mozilla/5.0"})
+                if r.ok and r.content:
+                    cover_bytes = r.content
+            except Exception as e:
+                log_warning(f"封面下载失败: {type(e).__name__} {str(e)[:120]}")
+        if cover_bytes:
+            parts.append("封面")
+        else:
+            log_warning(f"未获取到封面: [{track.platform}] {track.title}")
+            parts.append("无封面")
+
+        # 标签（含嵌入封面/歌词），失败不影响已下载的音频
+        try:
+            write_track_tags(path, title=track.title, artist=track.artist,
+                             album=track.album, cover_bytes=cover_bytes,
+                             lyrics_text=lrc_text or None)
+        except Exception as e:
+            log_warning(f"标签写入失败: {type(e).__name__} {str(e)[:120]}")
+        return "+".join(parts)
+
     # ---------------- 主循环 ----------------
     def handle_key(self, key: str):
         if key is None:
@@ -1292,17 +1534,18 @@ class App:
         if self._selector_active:
             self._handle_selector_key(key)
             return
-        if key == "q":
+        kb = self.cfg.keybindings
+        if key == kb.quit:
             self._running = False
-        elif key == "\t":
+        elif key == kb.selector:
             self._toggle_selector()
-        elif key == "o":
+        elif key == kb.online:
             self._enter_online_mode()
-        elif key == " ":
+        elif key == kb.play_pause:
             self.play_pause()
-        elif key == "n":
+        elif key == kb.next:
             self.next_track()
-        elif key == "p":
+        elif key == kb.prev:
             self.prev_track()
         elif key == "LEFT":
             self.player.seek_relative(-5)
@@ -1312,15 +1555,17 @@ class App:
             self.player.volume_relative(0.05)
         elif key == "DOWN":
             self.player.volume_relative(-0.05)
-        elif key == "s":
+        elif key == kb.spectrum:
             self.toggle_spectrum()
-        elif key == "t":
+        elif key == kb.theme:
             self.cycle_theme()
-        elif key == "m":
+        elif key == kb.mode:
             self.cycle_mode()
-        elif key == "r":
+        elif key == kb.reload:
             self.reload_cfg()
-        elif key == "d":
+        elif key == kb.download and self._online_current is not None:
+            self._download_current_online()
+        elif key == kb.dir_setup and self._online_current is None:
             self.rerun_dir_setup()
 
     def run(self):
@@ -1374,6 +1619,7 @@ class App:
                             self.cfg, self.current_track, self.player, levels,
                             self.lyrics_data, self.playlist, self._spectrum_on,
                             width=self.cfg.playback.ui_width,
+                            status=self._current_status(),
                         )
                     live.update(renderable, refresh=True)
 

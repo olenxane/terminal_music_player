@@ -139,6 +139,46 @@ class OnlineMusicConfig:
     qq_quality: int = 320          # 128 或 320
     wy_quality: str = "exhigh"     # standard/higher/exhigh/lossless/hires
     bi_quality: int = 320          # B站音频音质上限：320=尽力最高(实际192K)/192/132/64
+    download_dir: str = "download_musics"  # 在线歌曲下载目录；相对路径以程序目录为基准，空 = 当前工作目录
+
+
+def _norm_bind_key(value, default: str) -> str:
+    """归一化按键绑定：space→空格，tab→\\t，其余取小写单字符"""
+    v = str(value or "").strip().lower()
+    if not v:
+        return default
+    if v == "space":
+        return " "
+    if v == "tab":
+        return "\t"
+    return v[0]
+
+
+@dataclass
+class KeyBindingsConfig:
+    quit: str = "q"
+    selector: str = "\t"
+    online: str = "o"
+    play_pause: str = " "
+    next: str = "n"
+    prev: str = "p"
+    spectrum: str = "s"
+    theme: str = "t"
+    mode: str = "m"
+    reload: str = "r"
+    download: str = "d"
+    dir_setup: str = "u"
+
+
+def _load_keybindings(raw: dict) -> KeyBindingsConfig:
+    kb_raw = raw.get("keybindings", {}) or {}
+    defaults = KeyBindingsConfig()
+    kb = KeyBindingsConfig()
+    for field_name in vars(defaults):
+        setattr(kb, field_name,
+                _norm_bind_key(kb_raw.get(field_name),
+                               getattr(defaults, field_name)))
+    return kb
 
 
 @dataclass
@@ -154,6 +194,7 @@ class AppConfig:
     raw: dict
     path: str
     online_music: OnlineMusicConfig = field(default_factory=OnlineMusicConfig)
+    keybindings: KeyBindingsConfig = field(default_factory=KeyBindingsConfig)
 
     def theme_names(self):
         return list(self.all_themes.keys())
@@ -317,7 +358,9 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> AppConfig:
         qq_quality=int(om_raw.get("qq_quality", 320)),
         wy_quality=om_raw.get("wy_quality", "exhigh"),
         bi_quality=int(om_raw.get("bi_quality", 320)),
+        download_dir=str(om_raw.get("download_dir", "download_musics") or ""),
     )
+    keybindings = _load_keybindings(raw)
 
     return AppConfig(
         music_dirs=music_dirs,
@@ -331,6 +374,7 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> AppConfig:
         raw=raw,
         path=path,
         online_music=online_music,
+        keybindings=keybindings,
     )
 
 

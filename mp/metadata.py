@@ -84,3 +84,71 @@ def read_metadata(path: str) -> TrackInfo:
 
     return TrackInfo(path=path, title=title, artist=artist, album=album,
                       duration_sec=duration, filetype=ext)
+
+
+def write_track_tags(path: str, title: str = "", artist: str = "", album: str = "",
+                     cover_bytes: bytes | None = None,
+                     lyrics_text: str | None = None) -> None:
+    """把标题/艺人/专辑/封面/歌词写入音频文件标签（支持 mp3/m4a/flac）。
+
+    任一字段为空则跳过；格式不支持或 mutagen 缺失时抛异常，由调用方降级处理。
+    """
+    if MutagenFile is None:
+        raise RuntimeError("未安装 mutagen，无法写入标签")
+    audio = MutagenFile(path)
+    if audio is None or not hasattr(audio, "save"):
+        raise ValueError(f"mutagen 无法解析该文件: {path}")
+    ext = os.path.splitext(path)[1].lower()
+
+    if ext == ".mp3":
+        from mutagen.id3 import ID3, TIT2, TPE1, TALB, APIC, USLT
+        tags = audio.tags
+        if not isinstance(tags, ID3):
+            tags = ID3()
+        if title:
+            tags.add(TIT2(encoding=3, text=[title]))
+        if artist:
+            tags.add(TPE1(encoding=3, text=[artist]))
+        if album:
+            tags.add(TALB(encoding=3, text=[album]))
+        if lyrics_text:
+            tags.add(USLT(encoding=3, lang="chi", desc="", text=lyrics_text))
+        if cover_bytes:
+            tags.add(APIC(encoding=3, mime="image/jpeg", type=3,
+                          desc="Cover", data=cover_bytes))
+        audio.tags = tags
+        audio.save()
+    elif ext in (".m4a", ".mp4"):
+        from mutagen.mp4 import MP4Cover
+        if title:
+            audio["\xa9nam"] = [title]
+        if artist:
+            audio["\xa9ART"] = [artist]
+        if album:
+            audio["\xa9alb"] = [album]
+        if lyrics_text:
+            audio["\xa9lyr"] = [lyrics_text]
+        if cover_bytes:
+            audio["covr"] = [MP4Cover(cover_bytes, imageformat=MP4Cover.FORMAT_JPEG)]
+        audio.save()
+    elif ext == ".flac":
+        if title:
+            audio["title"] = [title]
+        if artist:
+            audio["artist"] = [artist]
+        if album:
+            audio["album"] = [album]
+        if lyrics_text:
+            audio["LYRICS"] = [lyrics_text]
+        if cover_bytes:
+            from mutagen.flac import Picture
+            pic = Picture()
+            pic.data = cover_bytes
+            pic.mime = "image/jpeg"
+            pic.type = 3  # front cover
+            pic.desc = "Cover"
+            audio.clear_pictures()
+            audio.add_picture(pic)
+        audio.save()
+    else:
+        raise ValueError(f"不支持的标签格式: {ext}")

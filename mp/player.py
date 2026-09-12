@@ -94,21 +94,21 @@ class Player:
         self._loudness_cancel: Optional[threading.Event] = None
 
     # ---------- 属性 ----------
+    # 这些属性仅读单值且只在回调/加载路径写入（GIL 下原子），
+    # 故意不加锁：音频回调在锁内执行网络流读取（在线歌曲），
+    # 若主线程渲染时阻塞等锁，网络抖动会导致整个 UI 卡死。
     @property
     def position_sec(self) -> float:
-        with self._lock:
-            return self._frames_played / self._samplerate if self._samplerate else 0.0
+        return self._frames_played / self._samplerate if self._samplerate else 0.0
 
     @property
     def listened_sec(self) -> float:
         """实际已听秒数：仅正常播放时递增，不含 seek 跳变（统计30秒判定用）"""
-        with self._lock:
-            return self._frames_listened / self._samplerate if self._samplerate else 0.0
+        return self._frames_listened / self._samplerate if self._samplerate else 0.0
 
     @property
     def duration_sec(self) -> float:
-        with self._lock:
-            return self._duration_frames / self._samplerate if self._samplerate else 0.0
+        return self._duration_frames / self._samplerate if self._samplerate else 0.0
 
     @property
     def path(self) -> str:
@@ -312,8 +312,13 @@ class Player:
         if self._file is None:
             return
         target_frame = int(max(0, min(seconds, self.duration_sec)) * self._samplerate)
-        with self._lock:
+        # 非阻塞抢锁：回调正被网络读取阻塞时放弃本次 seek，避免卡死主线程
+        if not self._lock.acquire(blocking=False):
+            return
+        try:
             self._seek_target = target_frame
+        finally:
+            self._lock.release()
 
     def seek_relative(self, delta_seconds: float):
         self.seek(self.position_sec + delta_seconds)
