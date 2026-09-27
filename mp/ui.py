@@ -193,6 +193,11 @@ def render_spectrum(levels: np.ndarray, theme, height: int = 4,
     return text
 
 
+_DSP_TAGS = {"eq": "EQ", "vbe": "VBE", "exciter": "EXC", "widener": "WID",
+             "loudness": "LUFS", "limiter": "LIM"}
+
+
+
 def _render_title_line(track, player, playlist, theme, width: int,
                        marquee: MarqueeConfig | None = None) -> Text:
     """行1: 状态图标 标题 · 艺人 时间 [模式] 音量

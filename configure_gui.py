@@ -43,6 +43,8 @@ KEYBIND_ACTIONS = [
     ("reload", "热重载配置", "r"),
     ("download", "下载当前在线歌曲", "d"),
     ("dir_setup", "重新配置音频目录", "u"),
+    ("exciter", "激励器开关", "e"),
+    ("widener", "声场展宽开关", "w"),
 ]
 
 
@@ -658,12 +660,52 @@ class ConfigGUI:
                     textvariable=self._dsp_lim_threshold, width=8).grid(
             row=1, column=1, sticky="w")
         ttk.Label(lim, text="释放时间 (ms):").grid(row=2, column=0, sticky="w", padx=4, pady=2)
-        self._dsp_lim_release = tk.DoubleVar(value=dsp.get("limiter", {}).get("release_ms", 50.0))
+        self._dsp_lim_release = tk.DoubleVar(value=dsp.get("limiter", {}).get("release_ms", 150.0))
         ttk.Spinbox(lim, from_=5, to=500, increment=5,
                     textvariable=self._dsp_lim_release, width=8).grid(
             row=2, column=1, sticky="w")
 
-        ttk.Label(frame, text="提示: 各模块独立开关，全部关闭时不影响原有播放链路。",
+        # ---- 谐波激励器 ----
+        exc = ttk.LabelFrame(frame, text="谐波激励器 (Exciter)")
+        exc.pack(fill="x", padx=8, pady=4)
+        self._dsp_exc_enabled = tk.BooleanVar(value=dsp.get("exciter", {}).get("enabled", True))
+        ttk.Checkbutton(exc, text="启用激励器（高频光泽）", variable=self._dsp_exc_enabled).grid(
+            row=0, column=0, sticky="w", padx=4, pady=2)
+        ttk.Label(exc, text="起始频率 (Hz):").grid(row=1, column=0, sticky="w", padx=4, pady=2)
+        self._dsp_exc_freq = tk.DoubleVar(value=dsp.get("exciter", {}).get("freq_hz", 3500.0))
+        ttk.Spinbox(exc, from_=1000, to=8000, increment=250,
+                    textvariable=self._dsp_exc_freq, width=8).grid(
+            row=1, column=1, sticky="w")
+        ttk.Label(exc, text="混合比例 (0~0.5):").grid(row=2, column=0, sticky="w", padx=4, pady=2)
+        self._dsp_exc_mix = tk.DoubleVar(value=dsp.get("exciter", {}).get("mix", 0.15))
+        ttk.Spinbox(exc, from_=0.0, to=0.5, increment=0.05,
+                    textvariable=self._dsp_exc_mix, width=8).grid(
+            row=2, column=1, sticky="w")
+
+        # ---- 声场展宽器 ----
+        wid = ttk.LabelFrame(frame, text="声场展宽器 (Stereo Widener)")
+        wid.pack(fill="x", padx=8, pady=4)
+        self._dsp_wid_enabled = tk.BooleanVar(value=dsp.get("widener", {}).get("enabled", True))
+        ttk.Checkbutton(wid, text="启用声场展宽（M/S 扩展）", variable=self._dsp_wid_enabled).grid(
+            row=0, column=0, sticky="w", padx=4, pady=2)
+        ttk.Label(wid, text="展宽系数 (1~2):").grid(row=1, column=0, sticky="w", padx=4, pady=2)
+        self._dsp_wid_width = tk.DoubleVar(value=dsp.get("widener", {}).get("width", 1.3))
+        ttk.Spinbox(wid, from_=1.0, to=2.0, increment=0.1,
+                    textvariable=self._dsp_wid_width, width=8).grid(
+            row=1, column=1, sticky="w")
+        ttk.Label(wid, text="低频保护 (Hz):").grid(row=2, column=0, sticky="w", padx=4, pady=2)
+        self._dsp_wid_hp = tk.DoubleVar(value=dsp.get("widener", {}).get("hp_freq_hz", 250.0))
+        ttk.Spinbox(wid, from_=80, to=500, increment=10,
+                    textvariable=self._dsp_wid_hp, width=8).grid(
+            row=2, column=1, sticky="w")
+        ttk.Label(wid, text="房间混响 (0~1):").grid(row=3, column=0, sticky="w", padx=4, pady=2)
+        self._dsp_wid_room = tk.DoubleVar(value=dsp.get("widener", {}).get("room_mix", 0.0))
+        ttk.Spinbox(wid, from_=0.0, to=1.0, increment=0.02,
+                    textvariable=self._dsp_wid_room, width=8).grid(
+            row=3, column=1, sticky="w")
+
+        ttk.Label(frame, text="提示: 各模块独立开关，全部关闭时为纯净输出。"
+                              "处理顺序 (dsp.chain) 请在 config.yaml 中编辑；保存后按 r 热重载。",
                   foreground="#888").pack(anchor="w", padx=8, pady=4)
 
     def _collect_dsp(self):
@@ -675,6 +717,15 @@ class ConfigGUI:
         dsp.setdefault("limiter", {})["enabled"] = self._dsp_lim_enabled.get()
         dsp["limiter"]["threshold_db"] = self._dsp_lim_threshold.get()
         dsp["limiter"]["release_ms"] = self._dsp_lim_release.get()
+        exc = dsp.setdefault("exciter", {})
+        exc["enabled"] = self._dsp_exc_enabled.get()
+        exc["freq_hz"] = self._dsp_exc_freq.get()
+        exc["mix"] = round(self._dsp_exc_mix.get(), 3)
+        wid = dsp.setdefault("widener", {})
+        wid["enabled"] = self._dsp_wid_enabled.get()
+        wid["width"] = round(self._dsp_wid_width.get(), 2)
+        wid["hp_freq_hz"] = self._dsp_wid_hp.get()
+        wid["room_mix"] = round(self._dsp_wid_room.get(), 3)
 
     # --- 音频目录 Tab ---
     def _build_dirs_tab(self, notebook: ttk.Notebook):

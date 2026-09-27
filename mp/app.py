@@ -456,12 +456,14 @@ class App:
         if self.player.equalizer:
             self.player.set_eq_bands(self.cfg.equalizer.bands_db,
                                      q_values=self.cfg.equalizer.q_values)
-        # 同步 DSP 开关
-        self.player.loudness_enabled = self.cfg.dsp.loudness.enabled
-        self.player.vbe_enabled = self.cfg.dsp.vbe.enabled
-        self.player.limiter_enabled = self.cfg.dsp.limiter.enabled
-        self.player.loudness_target_lufs = self.cfg.dsp.loudness.target_lufs
-        self.player._init_dsp_modules()
+        # DSP 配置整体热替换：重建模块、按新 chain 生效并重新分析电平匹配
+        if self.cfg.dsp.chain_invalid:
+            log_warning(f"dsp.chain 含未知模块已忽略: {self.cfg.dsp.chain_invalid}")
+        self.player.apply_dsp_config(
+            self.cfg.dsp,
+            eq_bands=self.cfg.equalizer.bands_db,
+            q_values=self.cfg.equalizer.q_values,
+        )
         # 同步在线音质
         self.online_mgr._qq_quality = self.cfg.online_music.qq_quality
         self.online_mgr._wy_quality = self.cfg.online_music.wy_quality
@@ -1557,6 +1559,12 @@ class App:
             self.player.volume_relative(-0.05)
         elif key == kb.spectrum:
             self.toggle_spectrum()
+        elif key == kb.exciter:
+            on = self.player.toggle_exciter()
+            self._set_status(f"♪ 激励器: {'开' if on else '关'}")
+        elif key == kb.widener:
+            on = self.player.toggle_widener()
+            self._set_status(f"♪ 声场展宽: {'开' if on else '关'}")
         elif key == kb.theme:
             self.cycle_theme()
         elif key == kb.mode:

@@ -18,6 +18,48 @@ BAND_FREQS = ["31Hz", "62Hz", "125Hz", "250Hz", "500Hz", "1kHz",
 BAND_CENTER_HZ = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
 DEFAULT_Q_VALUES = [1.0, 1.0, 1.0, 1.0, 2.5, 1.0, 1.0, 1.0, 4.0, 1.0]
 
+# 30 段 1/3 倍频程（ISO 中心频率，20Hz~16kHz），peaking EQ 对应 Q≈4.32
+BAND_FREQS_30 = ["20Hz", "25Hz", "31.5Hz", "40Hz", "50Hz", "63Hz", "80Hz",
+                 "100Hz", "125Hz", "160Hz", "200Hz", "250Hz", "315Hz", "400Hz",
+                 "500Hz", "630Hz", "800Hz", "1kHz", "1.25kHz", "1.6kHz",
+                 "2kHz", "2.5kHz", "3.15kHz", "4kHz", "5kHz", "6.3kHz",
+                 "8kHz", "10kHz", "12.5kHz", "16kHz"]
+BAND_CENTER_HZ_30 = [20, 25, 31.5, 40, 50, 63, 80, 100, 125, 160, 200, 250,
+                     315, 400, 500, 630, 800, 1000, 1250, 1600, 2000, 2500,
+                     3150, 4000, 5000, 6300, 8000, 10000, 12500, 16000]
+DEFAULT_Q_VALUES_30 = [4.32] * 30
+
+
+def band_table(band_count: int):
+    """按段数返回 (频段标签, 中心频率, 默认Q) 三元组；未知段数回退 10 段"""
+    if band_count == 30:
+        return BAND_FREQS_30, BAND_CENTER_HZ_30, DEFAULT_Q_VALUES_30
+    return BAND_FREQS, BAND_CENTER_HZ, DEFAULT_Q_VALUES
+
+
+def interp_bands(vals, src_freqs, dst_freqs):
+    """把频段增益按对数频率线性插值到新频段表（预设跨段数复用用）"""
+    import math
+    if len(vals) != len(src_freqs):
+        return [0.0] * len(dst_freqs)
+    out = []
+    for f in dst_freqs:
+        lf = math.log10(max(f, 1e-1))
+        if lf <= math.log10(src_freqs[0]):
+            out.append(float(vals[0]))
+            continue
+        if lf >= math.log10(src_freqs[-1]):
+            out.append(float(vals[-1]))
+            continue
+        for i in range(len(src_freqs) - 1):
+            f0, f1 = src_freqs[i], src_freqs[i + 1]
+            l0, l1 = math.log10(f0), math.log10(f1)
+            if l0 <= lf <= l1:
+                t = (lf - l0) / (l1 - l0) if l1 > l0 else 0.0
+                out.append(float(vals[i] + t * (vals[i + 1] - vals[i])))
+                break
+    return out
+
 class ConfigError(Exception):
     pass
 
@@ -62,9 +104,10 @@ class ThemeColors:
 @dataclass
 class EqualizerConfig:
     enabled: bool
-    bands_db: list  # 10 个 float, 单位 dB, 顺序与 BAND_FREQS 一致
-    q_values: list  # 10 个 float, 每个频段的 Q 值
+    bands_db: list  # 频段增益, 单位 dB, 顺序与 band_table(band_count) 一致
+    q_values: list  # 每个频段的 Q 值
     preset: str = "custom"
+    band_count: int = 10  # 10 段或 30 段（1/3 倍频程）
 
 
 @dataclass
@@ -128,10 +171,37 @@ class LimiterConfig:
 
 
 @dataclass
+class ExciterConfig:
+    """谐波激励器：对高频段做软饱和，增加人声/高频光泽"""
+    enabled: bool = True
+    freq_hz: float = 3500.0   # 激励起始频率
+    mix: float = 0.15         # 谐波混合比例 0~0.5
+
+
+@dataclass
+class WidenerConfig:
+    """声场展宽器：M/S 立体声扩展，低频自动保持居中；可选房间混响"""
+    enabled: bool = True
+    width: float = 1.3        # 展宽系数 1.0(原始)~2.0
+    hp_freq_hz: float = 250.0  # 侧通道高通截止，低于此频率保持单声道
+    room_mix: float = 0.0     # 房间混响湿量 0~1，默认关闭
+
+
+# DSP 链默认顺序：整形类在前，电平管理类在后
+DEFAULT_DSP_CHAIN = ["eq", "vbe", "exciter", "widener", "loudness", "limiter"]
+# 合法模块名集合（chain 校验用）
+DSP_CHAIN_MODULES = set(DEFAULT_DSP_CHAIN)
+
+
+@dataclass
 class DspConfig:
     loudness: LoudnessConfig = field(default_factory=LoudnessConfig)
     vbe: VbeConfig = field(default_factory=VbeConfig)
     limiter: LimiterConfig = field(default_factory=LimiterConfig)
+    exciter: ExciterConfig = field(default_factory=ExciterConfig)
+    widener: WidenerConfig = field(default_factory=WidenerConfig)
+    chain: list = field(default_factory=lambda: list(DEFAULT_DSP_CHAIN))
+    chain_invalid: list = field(default_factory=list)  # chain 中被丢弃的非法项，供上层告警
 
 
 @dataclass
@@ -168,6 +238,8 @@ class KeyBindingsConfig:
     reload: str = "r"
     download: str = "d"
     dir_setup: str = "u"
+    exciter: str = "e"   # 切换谐波激励器
+    widener: str = "w"   # 切换声场展宽器
 
 
 def _load_keybindings(raw: dict) -> KeyBindingsConfig:
@@ -217,22 +289,30 @@ def _build_theme(key: str, raw: dict) -> ThemeColors:
 
 
 def _resolve_eq_bands(eq_raw: dict) -> list:
+    band_count = int(eq_raw.get("band_count", 10) or 10)
+    freqs, _, _ = band_table(band_count)
     preset = eq_raw.get("preset", "custom")
     presets = eq_raw.get("presets", {})
     if preset != "custom" and preset in presets:
         vals = presets[preset]
+        # 预设段数与目标段数不一致时，按对数频率插值迁移
+        if len(vals) != band_count:
+            src_freqs = BAND_CENTER_HZ if len(vals) == 10 else BAND_CENTER_HZ_30
+            vals = interp_bands(vals, src_freqs, freqs)
     else:
         bands_map = eq_raw.get("bands", {})
-        vals = [float(bands_map.get(f, 0)) for f in BAND_FREQS]
+        vals = [float(bands_map.get(f, 0)) for f in freqs]
     vals = [float(v) for v in vals]
-    if len(vals) != 10:
-        raise ConfigError("均衡器必须恰好包含 10 个频段的数值")
+    if len(vals) != band_count:
+        raise ConfigError(f"均衡器必须恰好包含 {band_count} 个频段的数值")
     return vals
 
 
 def _resolve_eq_q_values(eq_raw: dict) -> list:
+    band_count = int(eq_raw.get("band_count", 10) or 10)
+    freq_labels, _, default_q = band_table(band_count)
     q_map = eq_raw.get("q_values", {})
-    vals = [float(q_map.get(f, dq)) for f, dq in zip(BAND_FREQS, DEFAULT_Q_VALUES)]
+    vals = [float(q_map.get(f, dq)) for f, dq in zip(freq_labels, default_q)]
     return vals
 
 
@@ -281,6 +361,7 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> AppConfig:
         bands_db=_resolve_eq_bands(eq_raw),
         q_values=_resolve_eq_q_values(eq_raw),
         preset=eq_raw.get("preset", "custom"),
+        band_count=int(eq_raw.get("band_count", 10) or 10),
     )
 
     lyr_raw = raw.get("lyrics", {}) or {}
@@ -326,6 +407,22 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> AppConfig:
     loud_raw = dsp_raw.get("loudness", {}) or {}
     vbe_raw = dsp_raw.get("vbe", {}) or {}
     lim_raw = dsp_raw.get("limiter", {}) or {}
+    exc_raw = dsp_raw.get("exciter", {}) or {}
+    wid_raw = dsp_raw.get("widener", {}) or {}
+
+    # chain：有序模块列表；非法/重复项丢弃并记录，空缺用默认顺序
+    chain = []
+    chain_invalid = []
+    for name in (dsp_raw.get("chain") or DEFAULT_DSP_CHAIN):
+        name = str(name).strip().lower()
+        if name not in DSP_CHAIN_MODULES:
+            chain_invalid.append(name)
+            continue
+        if name not in chain:
+            chain.append(name)
+
+    exc_mix = float(exc_raw.get("mix", 0.15))
+    wid_width = float(wid_raw.get("width", 1.3))
     dsp = DspConfig(
         loudness=LoudnessConfig(
             enabled=bool(loud_raw.get("enabled", False)),
@@ -340,6 +437,19 @@ def load_config(path: str = DEFAULT_CONFIG_PATH) -> AppConfig:
             threshold_db=float(lim_raw.get("threshold_db", -1.0)),
             release_ms=float(lim_raw.get("release_ms", 50.0)),
         ),
+        exciter=ExciterConfig(
+            enabled=bool(exc_raw.get("enabled", True)),
+            freq_hz=float(min(max(exc_raw.get("freq_hz", 3500.0), 1000.0), 8000.0)),
+            mix=float(min(max(exc_mix, 0.0), 0.5)),
+        ),
+        widener=WidenerConfig(
+            enabled=bool(wid_raw.get("enabled", True)),
+            width=float(min(max(wid_width, 1.0), 2.0)),
+            hp_freq_hz=float(min(max(wid_raw.get("hp_freq_hz", 250.0), 80.0), 500.0)),
+            room_mix=float(min(max(wid_raw.get("room_mix", 0.0), 0.0), 1.0)),
+        ),
+        chain=chain or list(DEFAULT_DSP_CHAIN),
+        chain_invalid=chain_invalid,
     )
 
     themes_raw = raw.get("themes", {}) or {}

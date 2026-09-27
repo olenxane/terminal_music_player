@@ -5,7 +5,7 @@ from __future__ import annotations
 import numpy as np
 from scipy.signal import iirpeak, sosfilt, tf2sos, lfilter
 
-from .config import BAND_CENTER_HZ
+from .config import BAND_CENTER_HZ, BAND_CENTER_HZ_30
 
 
 def _peaking_eq_coeffs(freq, gain_db, q, fs):
@@ -41,8 +41,13 @@ class Equalizer:
         self._zi = [[np.zeros(2) for _ in range(len(self.filters))] for _ in range(channels)]
 
     def _build_filters(self):
+        # 依据增益列表长度选择频段表：10 段或 30 段（1/3 倍频程）
+        if len(self.bands_db) == len(BAND_CENTER_HZ_30):
+            center_hz = BAND_CENTER_HZ_30
+        else:
+            center_hz = BAND_CENTER_HZ
         self.filters = []
-        for freq, gain, q in zip(BAND_CENTER_HZ, self.bands_db, self.q_values):
+        for freq, gain, q in zip(center_hz, self.bands_db, self.q_values):
             if abs(gain) < 1e-9:
                 self.filters.append(None)  # 增益为0时跳过滤波，节省算力
                 continue

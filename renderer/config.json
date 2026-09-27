@@ -1,0 +1,33 @@
+{
+  "player": {
+    "cwd": "..",
+    "command": [
+      "python",
+      "main.py"
+    ],
+    "player_config": "config.yaml",
+    "graceful_key": "q",
+    "auto_reload": true,
+    "watch_interval_sec": 2.0,
+    "watch_debounce_sec": 1.5,
+    "watch_globs": [
+      "mp/**/*.py",
+      "*.py",
+      "config.yaml"
+    ]
+  },
+  "window": {
+    "cols": "auto",
+    "rows": "auto",
+    "pty_rows": 40,
+    "font_family": "Cascadia Mono",
+    "font_size": 12,
+    "fg_color": "#e6edf3",
+    "bg_color": "#10141a",
+    "bg_opacity": 0.85,
+    "always_on_top": true,
+    "locked": true,
+    "x": 276,
+    "y": 928
+  }
+}

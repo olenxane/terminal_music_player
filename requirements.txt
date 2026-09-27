@@ -1,0 +1,14 @@
+numpy
+scipy
+sounddevice
+mutagen
+rich
+pyyaml
+imageio-ffmpeg
+requests
+httpx
+qrcode
+pillow
+bilibili-api-python>=16.0
+aiohttp>=3.0
+rsa
